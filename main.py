@@ -129,6 +129,8 @@ def ar(text):
         return text
 
 from kivy.app import App
+from kivy.config import Config
+Config.set("kivy", "keyboard_mode", "system")
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
@@ -141,13 +143,14 @@ from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.clock import Clock
 from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Mesh
+from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.core.text import LabelBase, DEFAULT_FONT
 from kivy.animation import Animation
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.behaviors import ButtonBehavior
 
-Window.softinput_mode = "below_target"
+Window.softinput_mode = "pan"
 
 _FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoNaskhArabic-Regular.ttf")
 if os.path.exists(_FONT_PATH):
@@ -168,12 +171,43 @@ NEON_INDIGO = (0.47, 0.42, 1.0, 1)
 NEON_RED = (1.0, 0.20, 0.32, 1)
 NEON_GREEN = (0.25, 1.0, 0.62, 1)
 NEON_YELLOW = (1.0, 0.85, 0.25, 1)
+NEON_ORANGE = (1.0, 0.55, 0.15, 1)
+BTN_MUTED = (0.20, 0.20, 0.32, 1)
 
 TEXT_MAIN = (0.94, 0.95, 1.0, 1)
 TEXT_MUTED = (0.56, 0.58, 0.70, 1)
 TEXT_FAINT = (0.40, 0.42, 0.54, 1)
 
 Window.clearcolor = BG_DARK
+
+# ---------------------------------------------------------------------------
+# Gradient texture helper (for ReelsX-style gradient pill buttons)
+# ---------------------------------------------------------------------------
+_GRADIENT_CACHE = {}
+
+def _get_gradient_texture(c1, c2, steps=48):
+    key = (tuple(round(v, 3) for v in c1), tuple(round(v, 3) for v in c2), steps)
+    tex = _GRADIENT_CACHE.get(key)
+    if tex is not None:
+        return tex
+    buf = bytearray()
+    for i in range(steps):
+        t = i / (steps - 1) if steps > 1 else 0
+        r = c1[0] + (c2[0] - c1[0]) * t
+        g = c1[1] + (c2[1] - c1[1]) * t
+        b = c1[2] + (c2[2] - c1[2]) * t
+        a1 = c1[3] if len(c1) > 3 else 1.0
+        a2 = c2[3] if len(c2) > 3 else 1.0
+        a = a1 + (a2 - a1) * t
+        buf += bytes([
+            int(max(0, min(1, r)) * 255), int(max(0, min(1, g)) * 255),
+            int(max(0, min(1, b)) * 255), int(max(0, min(1, a)) * 255),
+        ])
+    tex = Texture.create(size=(steps, 1), colorfmt="rgba")
+    tex.blit_buffer(bytes(buf), colorfmt="rgba", bufferfmt="ubyte")
+    tex.wrap = "clamp_to_edge"
+    _GRADIENT_CACHE[key] = tex
+    return tex
 
 # ---------------------------------------------------------------------------
 # Local storage: recent-downloads history (no accounts, no login)
@@ -271,10 +305,8 @@ class _SilentLogger:
 
 def download_media(url, download_dir):
     os.makedirs(download_dir, exist_ok=True)
-    opts = {
+    base_opts = {
         "outtmpl": os.path.join(download_dir, "%(title).80s.%(ext)s"),
-        "format": "bestvideo+bestaudio/best/bestaudio",
-        "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
@@ -283,21 +315,28 @@ def download_media(url, download_dir):
         "retries": 2,
         "socket_timeout": 20,
     }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if not info:
-                return None, ar("فشل التحميل")
-        files = [
-            os.path.join(download_dir, f)
-            for f in sorted(os.listdir(download_dir))
-            if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
-        ]
-        if not files:
-            return None, ar("لم يتم العثور على ملفات")
-        return files, None
-    except Exception as e:
-        return None, str(e)[:300]
+    # Pick a single already-muxed format (video+audio in one file) so no
+    # ffmpeg merge step is ever required - ffmpeg isn't bundled on device.
+    last_err = ar("فشل التحميل")
+    for fmt in ("best[ext=mp4]/best", "best", "worst"):
+        opts = dict(base_opts)
+        opts["format"] = fmt
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if not info:
+                    continue
+            files = [
+                os.path.join(download_dir, f)
+                for f in sorted(os.listdir(download_dir))
+                if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
+            ]
+            if files:
+                return files, None
+        except Exception as e:
+            last_err = str(e)[:300]
+            continue
+    return None, last_err
 
 def fetch_preview(url):
     """Fetch metadata + a direct playable URL WITHOUT downloading, for in-app preview."""
@@ -524,18 +563,24 @@ class _PlayOverlay(ButtonBehavior, Widget):
         self.icon.pos = (cx - self.icon.width / 2, cy - self.icon.height / 2)
 
 class NeonButton(ButtonBehavior, BoxLayout):
-    def __init__(self, text="", color=NEON_PURPLE, text_color=None, icon_widget=None, **kwargs):
+    def __init__(self, text="", color=NEON_PURPLE, text_color=None, icon_widget=None, gradient=None, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "horizontal"
         self.spacing = dp(8)
         self.size_hint_y = None
         self.height = dp(54)
         self._color = color
+        self._gradient = gradient
         with self.canvas.before:
-            Color(*color[:3], 0.22)
+            glow_color = gradient[0] if gradient else color
+            Color(*glow_color[:3], 0.28)
             self._g2 = Line(rounded_rectangle=(0, 0, 0, 0, dp(16)), width=dp(10))
-            Color(*color)
-            self._fill = RoundedRectangle(radius=[dp(16)] * 4)
+            if gradient:
+                Color(1, 1, 1, 1)
+                self._fill = RoundedRectangle(radius=[dp(16)] * 4, texture=_get_gradient_texture(gradient[0], gradient[1]))
+            else:
+                Color(*color)
+                self._fill = RoundedRectangle(radius=[dp(16)] * 4)
         self.bind(pos=self._upd, size=self._upd)
         tcolor = text_color or (0.05, 0.05, 0.08, 1)
         self.add_widget(Widget())
@@ -695,15 +740,16 @@ class PreviewCard(GlowPanel):
 
         btn_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
         video_btn = NeonButton(
-            text=ar("تحميل الفيديو"), color=platform_color,
-            text_color=(0.05, 0.05, 0.08, 1),
-            icon_widget=_DownloadArrowIcon(color=(0.05, 0.05, 0.08, 1)),
+            text=ar("تحميل الفيديو"), gradient=(NEON_PINK, NEON_PURPLE),
+            text_color=(1, 1, 1, 1),
+            icon_widget=_DownloadArrowIcon(color=(1, 1, 1, 1)),
         )
         video_btn.bind(on_release=lambda *a: on_download_video and on_download_video())
         btn_row.add_widget(video_btn)
         audio_btn = NeonButton(
-            text=ar("الصوت فقط"), color=CARD_DARK_2, text_color=NEON_YELLOW,
-            icon_widget=_MusicNoteIcon(color=NEON_YELLOW),
+            text=ar("الصوت فقط"), gradient=(NEON_ORANGE, NEON_YELLOW),
+            text_color=(0.08, 0.05, 0.02, 1),
+            icon_widget=_MusicNoteIcon(color=(0.08, 0.05, 0.02, 1)),
         )
         audio_btn.bind(on_release=lambda *a: on_download_audio and on_download_audio())
         btn_row.add_widget(audio_btn)
@@ -806,13 +852,13 @@ class SaveProApp(App):
         input_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(8))
         self.ui = NeonInput(hint_text=ar("الصق الرابط هنا..."))
         input_row.add_widget(self.ui)
-        paste_btn = NeonButton(text=ar("لصق"), color=CARD_DARK_2, text_color=NEON_CYAN)
+        paste_btn = NeonButton(text=ar("لصق"), color=BTN_MUTED, text_color=NEON_CYAN)
         paste_btn.size_hint_x = None
         paste_btn.width = dp(64)
         paste_btn.bind(on_release=self.do_paste)
         input_row.add_widget(paste_btn)
         link_card.add_widget(input_row)
-        self.preview_btn = NeonButton(text=ar("معاينة"), color=NEON_CYAN)
+        self.preview_btn = NeonButton(text=ar("معاينة"), gradient=(NEON_PINK, NEON_PURPLE), text_color=(1, 1, 1, 1))
         self.preview_btn.bind(on_release=self.do_preview)
         link_card.add_widget(self.preview_btn)
         col.add_widget(link_card)
