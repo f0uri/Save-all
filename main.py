@@ -570,14 +570,14 @@ class PlatformCard(ElasticBehavior, GlassCard):
         if selected:
             Animation(rgba=(*self.platform["color"][:3], 0.15), duration=0.2).start(self._glow_c)
             Animation(rgba=self.platform["color"], duration=0.2).start(self._icon_c)
-            Animation(rgba=TEXT_MAIN, duration=0.2).start(self._label.color)
+            Animation(color=TEXT_MAIN, duration=0.2).start(self._label)
             Animation(rgba=GLASS_BORDER_ACTIVE, duration=0.2).start(self.border_color)
             Animation(rgba=(0.12, 0.12, 0.16, 0.9), duration=0.2).start(self.bg_color)
             self._mono.color = (0.05, 0.05, 0.08, 1)
         else:
             Animation(rgba=(*self.platform["color"][:3], 0.0), duration=0.2).start(self._glow_c)
             Animation(rgba=(0.12, 0.12, 0.15, 1), duration=0.2).start(self._icon_c)
-            Animation(rgba=TEXT_MUTED, duration=0.2).start(self._label.color)
+            Animation(color=TEXT_MUTED, duration=0.2).start(self._label)
             Animation(rgba=GLASS_BORDER, duration=0.2).start(self.border_color)
             Animation(rgba=GLASS_BG, duration=0.2).start(self.bg_color)
             self._mono.color = TEXT_MAIN
