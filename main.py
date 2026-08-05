@@ -137,7 +137,6 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.uix.popup import Popup
 from kivy.uix.image import AsyncImage, Image as KvImage
-from kivy.uix.video import Video
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.clock import Clock
@@ -927,27 +926,34 @@ class SaveProApp(App):
         Animation(height=dp(340), duration=0.22, t="out_cubic").start(self.preview_container)
 
     def open_player(self, play_url):
+        """Play the preview in the device's own video player/browser (no bundled
+        media-decoder library needed -> keeps the APK build stable)."""
         if not play_url:
             Popup(
                 title="", size_hint=(0.85, 0.22),
                 content=Label(text=ar("تعذّر تشغيل المعاينة، جرّب التحميل مباشرة"), color=NEON_RED, font_size="13.5sp"),
             ).open()
             return
-        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
-        video = Video(source=play_url, state="play", options={"eos": "stop"})
-        content.add_widget(video)
-        close_btn = NeonButton(text=ar("إغلاق"), color=CARD_DARK_2, text_color=TEXT_MAIN)
-        close_btn.size_hint_y = None
-        close_btn.height = dp(44)
-        content.add_widget(close_btn)
-        popup = Popup(title="", content=content, size_hint=(0.94, 0.72), separator_height=0,
-                       background_color=(0, 0, 0, 0.92))
-
-        def _close(*a):
-            video.state = "stop"
-            popup.dismiss()
-        close_btn.bind(on_release=_close)
-        popup.open()
+        try:
+            from jnius import autoclass
+            Intent = autoclass("android.content.Intent")
+            Uri = autoclass("android.net.Uri")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            intent = Intent(Intent.ACTION_VIEW)
+            intent.setDataAndType(Uri.parse(play_url), "video/*")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            PythonActivity.mActivity.startActivity(intent)
+            return
+        except Exception:
+            pass
+        try:
+            import webbrowser
+            webbrowser.open(play_url)
+        except Exception:
+            Popup(
+                title="", size_hint=(0.85, 0.22),
+                content=Label(text=ar("تعذّر فتح المعاينة"), color=NEON_RED, font_size="13.5sp"),
+            ).open()
 
     def do_paste(self, *a):
         try:

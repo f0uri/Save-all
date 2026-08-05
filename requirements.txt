@@ -1,6 +1,5 @@
 kivy==2.3.1
 requests
 yt-dlp
-ffpyplayer
 arabic-reshaper
 python-bidi
