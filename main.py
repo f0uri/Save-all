@@ -3,11 +3,10 @@
 """
 Save Pro - Universal Media Downloader
 Copyright 2026 Youssef Mansouri
-Neon, iOS-style, multi-platform downloader (Instagram / TikTok / Facebook / X / Pinterest)
+Premium iOS-style, multi-platform downloader (Instagram / TikTok / Facebook / X / Pinterest)
 Paste a public link and download - no login, no account required.
 """
 import os, time, sqlite3, threading
-
 import yt_dlp
 
 # -- Pure-Python Arabic shaping (no external packages) --
@@ -116,9 +115,9 @@ def ar(text):
         return text
     text = str(text)
     has_arabic = any(
-        '؀' <= ch <= 'ۿ' or 'ݐ' <= ch <= 'ݿ'
-        or 'ࢠ' <= ch <= 'ࣿ' or 'ﭐ' <= ch <= '﷿'
-        or 'ﹰ' <= ch <= '﻿'
+        '\u0600' <= ch <= '\u06FF' or '\u0750' <= ch <= '\u077F'
+        or '\u08A0' <= ch <= '\u08FF' or '\uFB50' <= ch <= '\uFDFF'
+        or '\uFE70' <= ch <= '\uFEFF'
         for ch in text
     )
     if not has_arabic:
@@ -137,18 +136,19 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
-from kivy.uix.popup import Popup
 from kivy.uix.image import AsyncImage, Image as KvImage
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
 from kivy.clock import Clock
-from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Mesh
+from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Mesh, Rectangle, StencilPush, StencilUse, StencilUnUse, StencilPop
 from kivy.graphics.texture import Texture
+from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Scale, Translate
 from kivy.metrics import dp
 from kivy.core.text import LabelBase, DEFAULT_FONT
 from kivy.animation import Animation
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.behaviors import ButtonBehavior
+from kivy.effects.dampedscroll import DampedScrollEffect
 
 Window.softinput_mode = "pan"
 
@@ -157,35 +157,32 @@ if os.path.exists(_FONT_PATH):
     LabelBase.register(DEFAULT_FONT, _FONT_PATH)
 
 # ---------------------------------------------------------------------------
-# Neon dark palette
+# Premium 2026 Dark Palette (Glassmorphism & Neons)
 # ---------------------------------------------------------------------------
-BG_DARK = (0.043, 0.043, 0.078, 1)
-CARD_DARK = (0.086, 0.086, 0.145, 0.92)
-CARD_DARK_2 = (0.11, 0.11, 0.18, 0.92)
-
-NEON_PINK = (1.0, 0.20, 0.66, 1)
-NEON_PURPLE = (0.62, 0.26, 1.0, 1)
-NEON_CYAN = (0.0, 0.92, 1.0, 1)
-NEON_BLUE = (0.20, 0.55, 1.0, 1)
-NEON_INDIGO = (0.47, 0.42, 1.0, 1)
-NEON_RED = (1.0, 0.20, 0.32, 1)
-NEON_GREEN = (0.25, 1.0, 0.62, 1)
-NEON_YELLOW = (1.0, 0.85, 0.25, 1)
-NEON_ORANGE = (1.0, 0.55, 0.15, 1)
-BTN_MUTED = (0.20, 0.20, 0.32, 1)
-
-TEXT_MAIN = (0.94, 0.95, 1.0, 1)
-TEXT_MUTED = (0.56, 0.58, 0.70, 1)
-TEXT_FAINT = (0.40, 0.42, 0.54, 1)
-
+BG_DARK = (0.02, 0.02, 0.03, 1.0)
+GLASS_BG = (0.09, 0.09, 0.12, 0.65)
+GLASS_BORDER = (1.0, 1.0, 1.0, 0.05)
+GLASS_BORDER_ACTIVE = (1.0, 1.0, 1.0, 0.15)
+NEON_PINK = (1.0, 0.15, 0.50, 1)
+NEON_PURPLE = (0.55, 0.20, 1.0, 1)
+NEON_CYAN = (0.0, 0.85, 1.0, 1)
+NEON_BLUE = (0.15, 0.45, 1.0, 1)
+NEON_INDIGO = (0.35, 0.30, 1.0, 1)
+NEON_RED = (1.0, 0.25, 0.35, 1)
+NEON_GREEN = (0.15, 0.90, 0.50, 1)
+NEON_YELLOW = (1.0, 0.80, 0.15, 1)
+NEON_ORANGE = (1.0, 0.50, 0.10, 1)
+TEXT_MAIN = (0.96, 0.96, 0.98, 1)
+TEXT_MUTED = (0.60, 0.62, 0.68, 1)
+TEXT_FAINT = (0.40, 0.42, 0.48, 1)
 Window.clearcolor = BG_DARK
 
 # ---------------------------------------------------------------------------
-# Gradient texture helper (for ReelsX-style gradient pill buttons)
+# Gradient texture helper (Smooth horizontal rendering)
 # ---------------------------------------------------------------------------
 _GRADIENT_CACHE = {}
 
-def _get_gradient_texture(c1, c2, steps=48):
+def _get_gradient_texture(c1, c2, steps=64):
     key = (tuple(round(v, 3) for v in c1), tuple(round(v, 3) for v in c2), steps)
     tex = _GRADIENT_CACHE.get(key)
     if tex is not None:
@@ -208,6 +205,9 @@ def _get_gradient_texture(c1, c2, steps=48):
     tex.wrap = "clamp_to_edge"
     _GRADIENT_CACHE[key] = tex
     return tex
+
+def _rr(pos, size, radius):
+    return (pos[0], pos[1], size[0], size[1], radius)
 
 # ---------------------------------------------------------------------------
 # Local storage: recent-downloads history (no accounts, no login)
@@ -281,15 +281,15 @@ def get_ua():
 # Platform definitions
 # ---------------------------------------------------------------------------
 PLATFORMS = [
-    {"id": "instagram", "mono": "IG", "label": ar("انستقرام"),
+    {"id": "instagram", "icon": "IG", "label": ar("انستقرام"),
      "color": NEON_PINK, "hint": ar("الصق رابط ريلز أو منشور من انستقرام")},
-    {"id": "tiktok", "mono": "TT", "label": ar("تيك توك"),
+    {"id": "tiktok", "icon": "TT", "label": ar("تيك توك"),
      "color": NEON_CYAN, "hint": ar("الصق رابط فيديو من تيك توك")},
-    {"id": "facebook", "mono": "f", "label": ar("فيسبوك"),
+    {"id": "facebook", "icon": "f", "label": ar("فيسبوك"),
      "color": NEON_BLUE, "hint": ar("الصق رابط فيديو أو ريلز من فيسبوك")},
-    {"id": "x", "mono": "X", "label": "X",
-     "color": NEON_INDIGO, "hint": ar("الصق رابط فيديو من منصة X")},
-    {"id": "pinterest", "mono": "P", "label": ar("بنترست"),
+    {"id": "x", "icon": "X", "label": "X",
+     "color": TEXT_MAIN, "hint": ar("الصق رابط فيديو من منصة X")},
+    {"id": "pinterest", "icon": "P", "label": ar("بنترست"),
      "color": NEON_RED, "hint": ar("الصق رابط بن من بنترست")},
 ]
 PLATFORM_BY_ID = {p["id"]: p for p in PLATFORMS}
@@ -315,8 +315,6 @@ def download_media(url, download_dir):
         "retries": 2,
         "socket_timeout": 20,
     }
-    # Pick a single already-muxed format (video+audio in one file) so no
-    # ffmpeg merge step is ever required - ffmpeg isn't bundled on device.
     last_err = ar("فشل التحميل")
     for fmt in ("best[ext=mp4]/best", "best", "worst"):
         opts = dict(base_opts)
@@ -326,20 +324,19 @@ def download_media(url, download_dir):
                 info = ydl.extract_info(url, download=True)
                 if not info:
                     continue
-            files = [
-                os.path.join(download_dir, f)
-                for f in sorted(os.listdir(download_dir))
-                if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
-            ]
-            if files:
-                return files, None
+                files = [
+                    os.path.join(download_dir, f)
+                    for f in sorted(os.listdir(download_dir))
+                    if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
+                ]
+                if files:
+                    return files, None
         except Exception as e:
             last_err = str(e)[:300]
             continue
     return None, last_err
 
 def fetch_preview(url):
-    """Fetch metadata + a direct playable URL WITHOUT downloading, for in-app preview."""
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -352,26 +349,31 @@ def fetch_preview(url):
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        if not info:
-            return None, ar("تعذّرت المعاينة")
-        play_url = info.get("url")
-        if not play_url:
-            fmts = info.get("formats") or []
-            playable = [
-                f for f in fmts
-                if f.get("url") and f.get("vcodec") not in (None, "none") and f.get("acodec") not in (None, "none")
-            ]
-            if playable:
-                playable.sort(key=lambda f: f.get("height") or 0)
-                play_url = playable[-1]["url"]
-            elif fmts:
-                play_url = fmts[-1].get("url")
-        return {
-            "title": info.get("title") or ar("بدون عنوان"),
-            "thumbnail": info.get("thumbnail") or "",
-            "duration": info.get("duration"),
-            "play_url": play_url,
-        }, None
+            if not info:
+                return None, ar("تعذّرت المعاينة")
+            play_url = info.get("url")
+            if not play_url:
+                fmts = info.get("formats") or []
+                playable = [
+                    f for f in fmts
+                    if f.get("url") and f.get("vcodec") not in (None, "none") and f.get("acodec") not in (None, "none")
+                ]
+                if playable:
+                    playable.sort(key=lambda f: f.get("height") or 0)
+                    play_url = playable[-1]["url"]
+                elif fmts:
+                    play_url = fmts[-1].get("url")
+            filesize = info.get("filesize") or info.get("filesize_approx")
+            resolution = info.get("resolution") or (f"{info.get('width')}x{info.get('height')}" if info.get('width') else None)
+            return {
+                "title": info.get("title") or ar("بدون عنوان"),
+                "thumbnail": info.get("thumbnail") or "",
+                "duration": info.get("duration"),
+                "play_url": play_url,
+                "resolution": resolution,
+                "filesize": filesize,
+                "extractor": info.get("extractor_key", "")
+            }, None
     except Exception as e:
         return None, str(e)[:250]
 
@@ -401,79 +403,196 @@ def download_audio_only(url, download_dir):
                 info = ydl.extract_info(url, download=True)
                 if not info:
                     continue
-            files = [
-                os.path.join(download_dir, f)
-                for f in sorted(os.listdir(download_dir))
-                if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
-            ]
-            if files:
-                return files, None
+                files = [
+                    os.path.join(download_dir, f)
+                    for f in sorted(os.listdir(download_dir))
+                    if os.path.isfile(os.path.join(download_dir, f)) and not f.endswith((".json", ".txt", ".part"))
+                ]
+                if files:
+                    return files, None
         except Exception as e:
             last_err = str(e)[:300]
             continue
     return None, last_err
 
-
-def _rr(pos, size, radius):
-    return (pos[0], pos[1], size[0], size[1], radius)
-
-class GlowPanel(BoxLayout):
-    """A dark rounded panel with a soft neon-glow border."""
-    def __init__(self, glow_color=NEON_PURPLE, radius=dp(20), fill=CARD_DARK, **kwargs):
+# ---------------------------------------------------------------------------
+# UI Components & Behaviors (Premium 2026 Redesign)
+# ---------------------------------------------------------------------------
+class ElasticBehavior(ButtonBehavior):
+    """Elastic touch interaction (scales down smoothly on press)."""
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._radius = radius
-        self._glow = glow_color
         with self.canvas.before:
-            Color(*glow_color[:3], 0.10)
-            self._g3 = Line(rounded_rectangle=(0, 0, 0, 0, radius), width=dp(9))
-            Color(*glow_color[:3], 0.18)
-            self._g2 = Line(rounded_rectangle=(0, 0, 0, 0, radius), width=dp(5))
-            Color(*fill)
-            self._fill = RoundedRectangle(radius=[radius] * 4)
-            Color(*glow_color[:3], 0.75)
-            self._g1 = Line(rounded_rectangle=(0, 0, 0, 0, radius), width=dp(1.4))
-        self.bind(pos=self._upd, size=self._upd)
+            PushMatrix()
+            self.scale_instr = Scale(1, 1, 1)
+        with self.canvas.after:
+            PopMatrix()
+        self.bind(pos=self.update_scale_origin, size=self.update_scale_origin)
 
-    def _upd(self, *a):
-        self._fill.pos = self.pos
-        self._fill.size = self.size
-        for g in (self._g1, self._g2, self._g3):
-            g.rounded_rectangle = _rr(self.pos, self.size, self._radius)
+    def update_scale_origin(self, *args):
+        self.scale_instr.origin = self.center
 
-class NeonInput(TextInput):
+    def on_touch_down(self, touch):
+        if super().on_touch_down(touch):
+            Animation.cancel_all(self.scale_instr)
+            Animation(x=0.96, y=0.96, z=1, duration=0.1, t='out_quad').start(self.scale_instr)
+            return True
+        return False
+
+    def on_touch_up(self, touch):
+        res = super().on_touch_up(touch)
+        Animation.cancel_all(self.scale_instr)
+        Animation(x=1, y=1, z=1, duration=0.4, t='out_elastic').start(self.scale_instr)
+        return res
+
+class GlassCard(BoxLayout):
+    """Modern Glassmorphism card."""
+    def __init__(self, radius=dp(24), **kwargs):
+        super().__init__(**kwargs)
+        self.radius = radius
+        with self.canvas.before:
+            self.bg_color = Color(*GLASS_BG)
+            self.bg_rect = RoundedRectangle(radius=[radius])
+            self.border_color = Color(*GLASS_BORDER)
+            self.border_line = Line(rounded_rectangle=(0, 0, 0, 0, radius), width=dp(1))
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+    def _update_rect(self, *args):
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+        self.border_line.rounded_rectangle = _rr(self.pos, self.size, self.radius)
+
+class PremiumInput(TextInput):
+    """2026 Style Text Input with focus animations."""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.multiline = False
         self.size_hint_y = None
-        self.height = dp(54)
+        self.height = dp(56)
         self.font_size = "15sp"
-        self.padding = [dp(16), dp(17), dp(16), dp(14)]
+        self.padding = [dp(18), dp(18), dp(18), dp(16)]
         self.background_normal = ""
         self.background_active = ""
         self.background_color = (0, 0, 0, 0)
         self.foreground_color = TEXT_MAIN
         self.hint_text_color = TEXT_FAINT
-        self.cursor_color = NEON_CYAN
+        self.cursor_color = NEON_PURPLE
         with self.canvas.before:
-            Color(*CARD_DARK_2)
-            self._bg = RoundedRectangle(radius=[dp(16)] * 4)
-            self._glow_color = Color(*NEON_PURPLE[:3], 0.35)
-            self._border = Line(rounded_rectangle=(0, 0, 0, 0, dp(16)), width=dp(1.4))
+            Color(0.04, 0.04, 0.06, 0.8)
+            self._bg = RoundedRectangle(radius=[dp(18)])
+            self._glow_color = Color(*GLASS_BORDER)
+            self._border = Line(rounded_rectangle=(0, 0, 0, 0, dp(18)), width=dp(1.2))
         self.bind(pos=self._upd, size=self._upd, focus=self._on_focus)
 
-    def _upd(self, *a):
+    def _upd(self, *args):
         self._bg.pos = self.pos
         self._bg.size = self.size
-        self._border.rounded_rectangle = _rr(self.pos, self.size, dp(16))
+        self._border.rounded_rectangle = _rr(self.pos, self.size, dp(18))
 
     def _on_focus(self, inst, val):
-        target = 0.95 if val else 0.35
-        Animation(a=target, duration=0.18).start(self._glow_color)
+        if val:
+            Animation(rgba=(*NEON_PURPLE[:3], 0.6), duration=0.2, t='out_cubic').start(self._glow_color)
+        else:
+            Animation(rgba=GLASS_BORDER, duration=0.2, t='out_cubic').start(self._glow_color)
 
+class PremiumButton(ElasticBehavior, BoxLayout):
+    """Gradient or solid beautiful button with perfect typography."""
+    def __init__(self, text="", gradient=None, bg_color=None, text_color=TEXT_MAIN, icon_widget=None, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "horizontal"
+        self.spacing = dp(8)
+        self.size_hint_y = None
+        self.height = dp(56)
+        with self.canvas.before:
+            if gradient:
+                Color(1, 1, 1, 1)
+                self._fill = RoundedRectangle(radius=[dp(18)], texture=_get_gradient_texture(gradient[0], gradient[1]))
+            else:
+                Color(*(bg_color or (0.15, 0.15, 0.18, 1)))
+                self._fill = RoundedRectangle(radius=[dp(18)])
+        self.bind(pos=self._upd, size=self._upd)
+        self.add_widget(Widget())
+        if icon_widget:
+            self.add_widget(icon_widget)
+        self.label = Label(
+            text=text, font_size="15sp", bold=True,
+            color=text_color, size_hint=(None, None)
+        )
+        self.label.bind(texture_size=lambda inst, val: setattr(self.label, "size", val))
+        self.add_widget(self.label)
+        self.add_widget(Widget())
+
+    def _upd(self, *args):
+        self._fill.pos = self.pos
+        self._fill.size = self.size
+
+class PlatformCard(ElasticBehavior, GlassCard):
+    """Premium 2026 App Store style platform card."""
+    def __init__(self, platform, on_select=None, **kwargs):
+        super().__init__(radius=dp(22), **kwargs)
+        self.orientation = "vertical"
+        self.size_hint = (None, None)
+        self.size = (dp(110), dp(130))
+        self.padding = [dp(12), dp(16), dp(12), dp(12)]
+        self.spacing = dp(8)
+        self.platform = platform
+        self.on_select = on_select
+        icon_wrap = AnchorLayout(size_hint_y=None, height=dp(56))
+        self.icon_bg = Widget(size_hint=(None, None), size=(dp(56), dp(56)))
+        with self.icon_bg.canvas:
+            self._glow_c = Color(*platform["color"][:3], 0.0)
+            self._glow = Ellipse(pos=self.icon_bg.pos, size=self.icon_bg.size)
+            self._icon_c = Color(0.12, 0.12, 0.15, 1)
+            self._icon_bg_el = Ellipse(pos=self.icon_bg.pos, size=self.icon_bg.size)
+        self.icon_bg.bind(pos=self._upd_icon, size=self._upd_icon)
+        icon_wrap.add_widget(self.icon_bg)
+        self._mono = Label(
+            text=platform["icon"], font_size="20sp", bold=True, color=TEXT_MAIN
+        )
+        icon_wrap.add_widget(self._mono)
+        self.add_widget(icon_wrap)
+        self._label = Label(
+            text=platform["label"], font_size="13sp", color=TEXT_MUTED, bold=True,
+            valign="middle", halign="center"
+        )
+        self.add_widget(self._label)
+
+    def _upd_icon(self, *args):
+        cx, cy = self.icon_bg.center_x, self.icon_bg.center_y
+        r = self.icon_bg.width / 2
+        self._icon_bg_el.pos = (cx - r, cy - r)
+        self._icon_bg_el.size = (r * 2, r * 2)
+        glow_r = r + dp(12)
+        self._glow.pos = (cx - glow_r, cy - glow_r)
+        self._glow.size = (glow_r * 2, glow_r * 2)
+
+    def set_selected(self, selected):
+        if selected:
+            Animation(rgba=(*self.platform["color"][:3], 0.15), duration=0.2).start(self._glow_c)
+            Animation(rgba=self.platform["color"], duration=0.2).start(self._icon_c)
+            Animation(rgba=TEXT_MAIN, duration=0.2).start(self._label.color)
+            Animation(rgba=GLASS_BORDER_ACTIVE, duration=0.2).start(self.border_color)
+            Animation(rgba=(0.12, 0.12, 0.16, 0.9), duration=0.2).start(self.bg_color)
+            self._mono.color = (0.05, 0.05, 0.08, 1)
+        else:
+            Animation(rgba=(*self.platform["color"][:3], 0.0), duration=0.2).start(self._glow_c)
+            Animation(rgba=(0.12, 0.12, 0.15, 1), duration=0.2).start(self._icon_c)
+            Animation(rgba=TEXT_MUTED, duration=0.2).start(self._label.color)
+            Animation(rgba=GLASS_BORDER, duration=0.2).start(self.border_color)
+            Animation(rgba=GLASS_BG, duration=0.2).start(self.bg_color)
+            self._mono.color = TEXT_MAIN
+
+    def on_release(self):
+        if self.on_select:
+            self.on_select(self.platform["id"])
+
+# ---------------------------------------------------------------------------
+# Icons
+# ---------------------------------------------------------------------------
 class _DownloadArrowIcon(Widget):
     def __init__(self, color=(1, 1, 1, 1), **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(18), dp(18)))
+        kwargs.setdefault("size", (dp(20), dp(20)))
         super().__init__(**kwargs)
         with self.canvas:
             Color(*color)
@@ -485,41 +604,41 @@ class _DownloadArrowIcon(Widget):
 
     def _upd(self, *a):
         cx = self.x + self.width / 2
-        top = self.y + self.height * 0.92
-        mid = self.y + self.height * 0.42
-        w = self.width * 0.34
+        top = self.y + self.height * 0.95
+        mid = self.y + self.height * 0.35
+        w = self.width * 0.35
         self._stem.points = [cx, top, cx, mid]
-        self._arrow.points = [cx - w, mid + self.height * 0.05, cx, mid - self.height * 0.08, cx + w, mid + self.height * 0.05]
-        self._base.points = [self.x + self.width * 0.12, self.y + self.height * 0.06, self.x + self.width * 0.88, self.y + self.height * 0.06]
+        self._arrow.points = [cx - w, mid + self.height * 0.1, cx, mid - self.height * 0.05, cx + w, mid + self.height * 0.1]
+        self._base.points = [self.x + self.width * 0.1, self.y + self.height * 0.05, self.x + self.width * 0.9, self.y + self.height * 0.05]
 
 class _MusicNoteIcon(Widget):
     def __init__(self, color=(1, 1, 1, 1), **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(18), dp(18)))
+        kwargs.setdefault("size", (dp(20), dp(20)))
         super().__init__(**kwargs)
         with self.canvas:
             Color(*color)
-            self._stem = Line(points=[0, 0, 0, 0], width=dp(1.6), cap="round")
-            self._flag = Line(points=[0, 0, 0, 0, 0, 0], width=dp(1.6), joint="round", cap="round")
+            self._stem = Line(points=[0, 0, 0, 0], width=dp(1.8), cap="round")
+            self._flag = Line(points=[0, 0, 0, 0, 0, 0], width=dp(1.8), joint="round", cap="round")
             self._head = Ellipse(pos=(0, 0), size=(0, 0))
         self.bind(pos=self._upd, size=self._upd)
         self._upd()
 
     def _upd(self, *a):
-        head_r = self.width * 0.20
-        hx = self.x + self.width * 0.32
-        hy = self.y + self.height * 0.24
+        head_r = self.width * 0.22
+        hx = self.x + self.width * 0.35
+        hy = self.y + self.height * 0.25
         self._head.pos = (hx - head_r, hy - head_r)
         self._head.size = (head_r * 2, head_r * 2)
         stem_x = hx + head_r * 0.9
-        top_y = self.y + self.height * 0.90
+        top_y = self.y + self.height * 0.95
         self._stem.points = [stem_x, hy, stem_x, top_y]
-        self._flag.points = [stem_x, top_y, stem_x + self.width * 0.30, top_y - self.height * 0.14, stem_x, top_y - self.height * 0.26]
+        self._flag.points = [stem_x, top_y, stem_x + self.width * 0.35, top_y - self.height * 0.15, stem_x, top_y - self.height * 0.30]
 
 class _PlayTriangleIcon(Widget):
     def __init__(self, color=(1, 1, 1, 1), **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(22), dp(22)))
+        kwargs.setdefault("size", (dp(24), dp(24)))
         super().__init__(**kwargs)
         with self.canvas:
             Color(*color)
@@ -528,25 +647,25 @@ class _PlayTriangleIcon(Widget):
         self._upd()
 
     def _upd(self, *a):
-        x0 = self.x + self.width * 0.30
-        y0 = self.y + self.height * 0.16
-        x1 = self.x + self.width * 0.30
-        y1 = self.y + self.height * 0.84
-        x2 = self.x + self.width * 0.86
+        x0 = self.x + self.width * 0.32
+        y0 = self.y + self.height * 0.18
+        x1 = self.x + self.width * 0.32
+        y1 = self.y + self.height * 0.82
+        x2 = self.x + self.width * 0.88
         y2 = self.y + self.height * 0.50
         self._tri.vertices = [x0, y0, 0, 0, x1, y1, 0, 0, x2, y2, 0, 0]
         self._tri.indices = [0, 1, 2]
 
-class _PlayOverlay(ButtonBehavior, Widget):
+class _PlayOverlay(ElasticBehavior, Widget):
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(58), dp(58)))
+        kwargs.setdefault("size", (dp(64), dp(64)))
         super().__init__(**kwargs)
         with self.canvas:
-            Color(0, 0, 0, 0.45)
+            Color(0.05, 0.05, 0.08, 0.6)
             self._circle = Ellipse(pos=self.pos, size=self.size)
-            Color(1, 1, 1, 0.85)
-            self._ring = Line(circle=(0, 0, 0), width=dp(1.4))
+            Color(1, 1, 1, 0.9)
+            self._ring = Line(circle=(0, 0, 0), width=dp(1.8))
         self.icon = _PlayTriangleIcon(color=(1, 1, 1, 1))
         self.add_widget(self.icon)
         self.bind(pos=self._upd, size=self._upd)
@@ -555,208 +674,217 @@ class _PlayOverlay(ButtonBehavior, Widget):
     def _upd(self, *a):
         self._circle.pos = self.pos
         self._circle.size = self.size
-        cx = self.center_x
-        cy = self.center_y
-        r = self.width / 2
-        self._ring.circle = (cx, cy, r)
-        self.icon.size = (self.width * 0.5, self.height * 0.5)
+        cx, cy = self.center_x, self.center_y
+        self._ring.circle = (cx, cy, self.width / 2)
+        self.icon.size = (self.width * 0.45, self.height * 0.45)
         self.icon.pos = (cx - self.icon.width / 2, cy - self.icon.height / 2)
 
-class NeonButton(ButtonBehavior, BoxLayout):
-    def __init__(self, text="", color=NEON_PURPLE, text_color=None, icon_widget=None, gradient=None, **kwargs):
+# ---------------------------------------------------------------------------
+# Loading / Skeleton states
+# ---------------------------------------------------------------------------
+class SkeletonPulseWidget(GlassCard):
+    """Pulsing placeholder for beautiful loading states."""
+    def __init__(self, **kwargs):
+        super().__init__(radius=dp(20), **kwargs)
+        self.bg_color.rgba = (0.15, 0.15, 0.18, 0.4)
+        self.border_color.rgba = (0, 0, 0, 0)
+        self._anim = Animation(a=0.8, duration=0.8, t='in_out_sine') + Animation(a=0.4, duration=0.8, t='in_out_sine')
+        self._anim.repeat = True
+        self._anim.start(self.bg_color)
+
+class ShimmerLine(Widget):
+    """Indeterminate progress bar that looks elegant."""
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.orientation = "horizontal"
-        self.spacing = dp(8)
         self.size_hint_y = None
-        self.height = dp(54)
-        self._color = color
-        self._gradient = gradient
-        with self.canvas.before:
-            glow_color = gradient[0] if gradient else color
-            Color(*glow_color[:3], 0.28)
-            self._g2 = Line(rounded_rectangle=(0, 0, 0, 0, dp(16)), width=dp(10))
-            if gradient:
-                Color(1, 1, 1, 1)
-                self._fill = RoundedRectangle(radius=[dp(16)] * 4, texture=_get_gradient_texture(gradient[0], gradient[1]))
-            else:
-                Color(*color)
-                self._fill = RoundedRectangle(radius=[dp(16)] * 4)
+        self.height = dp(4)
+        with self.canvas:
+            Color(1, 1, 1, 0.05)
+            self.bg = RoundedRectangle(radius=[dp(2)])
+            self.fill_color = Color(*NEON_CYAN)
+            self.fill = RoundedRectangle(radius=[dp(2)])
         self.bind(pos=self._upd, size=self._upd)
-        tcolor = text_color or (0.05, 0.05, 0.08, 1)
-        self.add_widget(Widget())
-        if icon_widget is not None:
-            self.add_widget(icon_widget)
-        self.label = Label(
-            text=text, font_size="15.5sp", bold=True,
-            color=tcolor, size_hint=(None, None),
-        )
-        self.label.bind(texture_size=lambda inst, val: setattr(self.label, "size", val))
-        self.add_widget(self.label)
-        self.add_widget(Widget())
+        self.fill_width = 0
+        self.fill_x = 0
+        self._anim = None
 
     def _upd(self, *a):
-        self._fill.pos = self.pos
-        self._fill.size = self.size
-        self._g2.rounded_rectangle = _rr(self.pos, self.size, dp(16))
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+        self.fill.pos = (self.x + self.fill_x, self.y)
+        self.fill.size = (self.fill_width, self.size[1])
 
-    def on_press(self):
-        Animation.cancel_all(self, "opacity")
-        Animation(opacity=0.8, duration=0.06).start(self)
+    def start(self):
+        if self._anim: Animation.cancel_all(self)
+        self.fill_width = self.width * 0.3
+        self.fill_x = -self.fill_width
+        self._anim = Animation(fill_x=self.width, duration=1.2, t='in_out_quad')
+        self._anim.bind(on_complete=self._restart_anim)
+        self._anim.start(self)
 
-    def on_release(self):
-        Animation.cancel_all(self, "opacity")
-        Animation(opacity=1, duration=0.14).start(self)
+    def _restart_anim(self, *args):
+        self.fill_x = -self.fill_width
+        self._anim.start(self)
 
-class PlatformChip(ButtonBehavior, BoxLayout):
-    def __init__(self, platform, on_select=None, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = "vertical"
-        self.spacing = dp(6)
-        self.platform = platform
-        self.on_select = on_select
-        self.selected = False
-        self.size_hint_y = None
-        self.height = dp(78)
-
-        badge_wrap = AnchorLayout(size_hint_y=None, height=dp(52))
-        self.badge = Widget(size_hint=(None, None), size=(dp(52), dp(52)))
-        with self.badge.canvas:
-            self._glow_c = Color(*platform["color"][:3], 0.0)
-            self._glow = Line(circle=(0, 0, 0), width=dp(6))
-            Color(*platform["color"])
-            self._circle = Ellipse()
-            Color(0, 0, 0, 0.22)
-            self._ring = Line(circle=(0, 0, 0), width=dp(1.2))
-        self.badge.bind(pos=self._upd_badge, size=self._upd_badge)
-        badge_wrap.add_widget(self.badge)
-        self.add_widget(badge_wrap)
-
-        self._label = Label(
-            text=platform["label"], font_size="12sp", color=TEXT_MUTED,
-            size_hint_y=None, height=dp(18),
-        )
-        self.add_widget(self._label)
-
-        self._mono_overlay = Label(
-            text=platform["mono"], font_size="18sp", bold=True, color=(0.06, 0.06, 0.09, 1),
-        )
-        badge_wrap.add_widget(self._mono_overlay)
-
-    def _upd_badge(self, *a):
-        cx = self.badge.center_x
-        cy = self.badge.center_y
-        r = self.badge.width / 2
-        self._circle.pos = (cx - r, cy - r)
-        self._circle.size = (r * 2, r * 2)
-        self._ring.circle = (cx, cy, r)
-        self._glow.circle = (cx, cy, r + dp(3))
-
-    def set_selected(self, selected):
-        self.selected = selected
-        if selected:
-            self._glow_c.a = 0.55
-            self._label.color = self.platform["color"]
-            Animation(width=dp(60), height=dp(60), duration=0.16, t="out_back").start(self.badge)
+    def stop(self, success=True):
+        if self._anim: Animation.cancel_all(self)
+        if success:
+            self.fill_color.rgba = NEON_GREEN
+            Animation(fill_x=0, fill_width=self.width, duration=0.3, t='out_quad').start(self)
         else:
-            self._glow_c.a = 0.0
-            self._label.color = TEXT_MUTED
-            Animation(width=dp(52), height=dp(52), duration=0.16).start(self.badge)
-
-    def on_release(self):
-        if self.on_select:
-            self.on_select(self.platform["id"])
+            self.fill_color.rgba = NEON_RED
+            Animation(fill_x=0, fill_width=self.width, duration=0.3, t='out_quad').start(self)
 
 # ---------------------------------------------------------------------------
-# History row
+# Notification Toast (Dialog replacement)
 # ---------------------------------------------------------------------------
-class HistoryRow(BoxLayout):
+class ToastContainer(FloatLayout):
+    def show_toast(self, text, is_error=False):
+        toast = GlassCard(radius=dp(16), size_hint=(None, None), size=(dp(300), dp(50)))
+        toast.pos_hint = {'center_x': 0.5}
+        toast.y = -dp(100)
+        if is_error:
+            toast.border_color.rgba = (*NEON_RED[:3], 0.4)
+            toast.bg_color.rgba = (*NEON_RED[:3], 0.1)
+        else:
+            toast.border_color.rgba = (*NEON_GREEN[:3], 0.4)
+            toast.bg_color.rgba = (*NEON_GREEN[:3], 0.1)
+        lbl = Label(text=ar(text), color=TEXT_MAIN, font_size="13sp", bold=True)
+        toast.add_widget(lbl)
+        self.add_widget(toast)
+        anim = Animation(y=dp(40), duration=0.5, t='out_back')
+        anim.bind(on_complete=lambda *args: Clock.schedule_once(lambda dt: self._hide_toast(toast), 3.0))
+        anim.start(toast)
+
+    def _hide_toast(self, toast):
+        anim = Animation(y=-dp(100), opacity=0, duration=0.4, t='in_back')
+        anim.bind(on_complete=lambda *args: self.remove_widget(toast))
+        anim.start(toast)
+
+# ---------------------------------------------------------------------------
+# History Row
+# ---------------------------------------------------------------------------
+class HistoryRow(ElasticBehavior, GlassCard):
+    """Modern notification-style history item."""
     def __init__(self, platform_id, filename, ts, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(radius=dp(16), **kwargs)
         self.size_hint_y = None
-        self.height = dp(46)
-        self.spacing = dp(10)
-        self.padding = [dp(4), 0, dp(4), 0]
+        self.height = dp(64)
+        self.padding = [dp(12), dp(8), dp(12), dp(8)]
+        self.spacing = dp(14)
+        self.bg_color.rgba = (0.1, 0.1, 0.13, 0.5)
         p = PLATFORM_BY_ID.get(platform_id, PLATFORMS[0])
-        dot = Widget(size_hint=(None, None), size=(dp(10), dp(10)))
-        with dot.canvas:
-            Color(*p["color"])
-            self._e = Ellipse(pos=dot.pos, size=dot.size)
-        dot.bind(pos=lambda i, v: setattr(self._e, "pos", v))
-        wrap = AnchorLayout(size_hint=(None, None), size=(dp(20), dp(46)))
-        wrap.add_widget(dot)
-        self.add_widget(wrap)
+        icon_box = AnchorLayout(size_hint=(None, None), size=(dp(40), dp(48)))
+        icon_bg = Widget(size_hint=(None, None), size=(dp(40), dp(40)))
+        with icon_bg.canvas:
+            Color(*p["color"][:3], 0.2)
+            self._ebg = Ellipse(pos=icon_bg.pos, size=icon_bg.size)
+        icon_bg.bind(pos=lambda i, v: setattr(self._ebg, "pos", v))
+        icon_box.add_widget(icon_bg)
+        icon_lbl = Label(text=p["icon"], font_size="16sp", bold=True, color=p["color"])
+        icon_box.add_widget(icon_lbl)
+        self.add_widget(icon_box)
+        text_box = BoxLayout(orientation="vertical", spacing=dp(2))
         name = os.path.basename(filename) if filename else "-"
-        self.add_widget(Label(
-            text=name, font_size="12.5sp", color=TEXT_MAIN,
-            halign="left", valign="middle", shorten=True, shorten_from="right",
-            text_size=(dp(190), dp(20)),
+        text_box.add_widget(Label(
+            text=name, font_size="14sp", color=TEXT_MAIN, bold=True,
+            halign="left", valign="bottom", shorten=True, shorten_from="right",
+            text_size=(dp(180), dp(22))
         ))
-        self.add_widget(Widget())
+        import datetime
+        date_str = datetime.datetime.fromtimestamp(ts).strftime("%d %b • %H:%M") if ts else ""
+        text_box.add_widget(Label(
+            text=date_str, font_size="11sp", color=TEXT_MUTED,
+            halign="left", valign="top", text_size=(dp(180), dp(18))
+        ))
+        self.add_widget(text_box)
+        self.add_widget(Widget()) # spacer
 
 # ---------------------------------------------------------------------------
-# Preview card: thumbnail + internal player + choose to download video/audio
+# Media Preview Card
 # ---------------------------------------------------------------------------
-class PreviewCard(GlowPanel):
+class MediaPreviewCard(GlassCard):
+    """Beautiful dynamic media preview card."""
     def __init__(self, data, platform_color, on_download_video=None, on_download_audio=None, on_play=None, **kwargs):
-        super().__init__(glow_color=platform_color, radius=dp(20), **kwargs)
+        super().__init__(radius=dp(24), **kwargs)
         self.orientation = "vertical"
-        self.padding = [dp(14), dp(14), dp(14), dp(14)]
-        self.spacing = dp(10)
+        self.padding = [dp(16), dp(16), dp(16), dp(16)]
+        self.spacing = dp(16)
         self.size_hint_y = None
-        self.height = dp(340)
-        self.data = data
-
-        thumb_wrap = FloatLayout(size_hint_y=None, height=dp(190))
+        self.height = dp(420)
+        self.border_color.rgba = (*platform_color[:3], 0.3)
+        self.bg_color.rgba = (0.1, 0.1, 0.14, 0.7)
+        # Thumbnail area with Stencil clipping for perfect rounded corners
+        thumb_wrap = FloatLayout(size_hint_y=None, height=dp(210))
         with thumb_wrap.canvas.before:
-            Color(0.05, 0.05, 0.09, 1)
-            self._thumb_bg = RoundedRectangle(radius=[dp(14)] * 4)
-        thumb_wrap.bind(pos=lambda i, v: setattr(self._thumb_bg, "pos", v),
-                         size=lambda i, v: setattr(self._thumb_bg, "size", v))
+            StencilPush()
+            self._thumb_mask = RoundedRectangle(radius=[dp(18)])
+            StencilUse()
+            Color(0.05, 0.05, 0.08, 1)
+            self._thumb_bg = RoundedRectangle(radius=[dp(18)])
+        with thumb_wrap.canvas.after:
+            StencilUnUse()
+            self._thumb_mask_after = RoundedRectangle(radius=[dp(18)])
+            StencilPop()
+        thumb_wrap.bind(pos=self._upd_thumb, size=self._upd_thumb)
         thumb = AsyncImage(
             source=data.get("thumbnail") or "", allow_stretch=True, keep_ratio=True,
-            size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
+            size_hint=(1, 1), pos_hint={"x": 0, "y": 0}
         )
         thumb_wrap.add_widget(thumb)
         play_btn = _PlayOverlay(pos_hint={"center_x": 0.5, "center_y": 0.5})
         play_btn.bind(on_release=lambda *a: on_play and on_play(data.get("play_url")))
         thumb_wrap.add_widget(play_btn)
         self.add_widget(thumb_wrap)
-
+        # Info Area
+        info_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(48), spacing=dp(4))
         title = Label(
-            text=ar(data.get("title") or ""), font_size="14sp", bold=True, color=TEXT_MAIN,
-            size_hint_y=None, height=dp(20), halign="left", valign="middle",
-            shorten=True, shorten_from="right", text_size=(dp(280), dp(20)),
+            text=ar(data.get("title") or ""), font_size="16sp", bold=True, color=TEXT_MAIN,
+            size_hint_y=None, height=dp(24), halign="left", valign="middle",
+            shorten=True, shorten_from="right", text_size=(dp(280), dp(24))
         )
-        self.add_widget(title)
-
+        info_box.add_widget(title)
+        meta_row = BoxLayout(spacing=dp(12), size_hint_y=None, height=dp(18))
         dur = data.get("duration")
-        dur_txt = ""
+        dur_txt = "-"
         if isinstance(dur, (int, float)) and dur > 0:
             m, s = divmod(int(dur), 60)
-            dur_txt = "{:d}:{:02d}".format(m, s)
-        meta_row = BoxLayout(size_hint_y=None, height=dp(16), spacing=dp(6))
-        meta_row.add_widget(Label(text=dur_txt, font_size="11sp", color=TEXT_MUTED, halign="left"))
-        self.add_widget(meta_row)
-
-        btn_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
-        video_btn = NeonButton(
-            text=ar("تحميل الفيديو"), gradient=(NEON_PINK, NEON_PURPLE),
-            text_color=(1, 1, 1, 1),
-            icon_widget=_DownloadArrowIcon(color=(1, 1, 1, 1)),
+            dur_txt = f"{m}:{s:02d}"
+        res_txt = data.get("resolution") or "HD"
+        fs = data.get("filesize")
+        fs_txt = f"{fs / (1024*1024):.1f} MB" if fs else "Unknown"
+        meta_text = f"{dur_txt} • {res_txt} • {fs_txt}"
+        meta_row.add_widget(Label(text=meta_text, font_size="12sp", color=TEXT_MUTED, halign="left", text_size=(dp(280), dp(18))))
+        info_box.add_widget(meta_row)
+        self.add_widget(info_box)
+        # Actions
+        btn_col = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(96))
+        video_btn = PremiumButton(
+            text=ar("تحميل الفيديو"), gradient=(platform_color, NEON_PURPLE),
+            text_color=(1, 1, 1, 1), icon_widget=_DownloadArrowIcon(color=(1, 1, 1, 1))
         )
+        video_btn.height = dp(44)
         video_btn.bind(on_release=lambda *a: on_download_video and on_download_video())
-        btn_row.add_widget(video_btn)
-        audio_btn = NeonButton(
-            text=ar("الصوت فقط"), gradient=(NEON_ORANGE, NEON_YELLOW),
-            text_color=(0.08, 0.05, 0.02, 1),
-            icon_widget=_MusicNoteIcon(color=(0.08, 0.05, 0.02, 1)),
+        btn_col.add_widget(video_btn)
+        audio_btn = PremiumButton(
+            text=ar("الصوت فقط"), bg_color=(0.15, 0.15, 0.20, 1),
+            text_color=TEXT_MAIN, icon_widget=_MusicNoteIcon(color=TEXT_MAIN)
         )
+        audio_btn.height = dp(44)
         audio_btn.bind(on_release=lambda *a: on_download_audio and on_download_audio())
-        btn_row.add_widget(audio_btn)
-        self.add_widget(btn_row)
+        btn_col.add_widget(audio_btn)
+        self.add_widget(btn_col)
+
+    def _upd_thumb(self, inst, val):
+        self._thumb_mask.pos = inst.pos
+        self._thumb_mask.size = inst.size
+        self._thumb_bg.pos = inst.pos
+        self._thumb_bg.size = inst.size
+        self._thumb_mask_after.pos = inst.pos
+        self._thumb_mask_after.size = inst.size
 
 # ---------------------------------------------------------------------------
-# Main app
+# Main App Layout
 # ---------------------------------------------------------------------------
 class SaveProApp(App):
     def build(self):
@@ -764,144 +892,126 @@ class SaveProApp(App):
         init_db()
         self.selected_platform = "instagram"
         self._chips = {}
-
+        # Root layout with dynamic animated background
         root = FloatLayout()
         with root.canvas.before:
             Color(*BG_DARK)
-            self._bg_rect = RoundedRectangle(pos=root.pos, size=root.size)
-            Color(*NEON_PINK[:3], 0.10)
-            self._blob1 = Ellipse(size=(dp(260), dp(260)))
-            Color(*NEON_PURPLE[:3], 0.10)
-            self._blob2 = Ellipse(size=(dp(300), dp(300)))
-            Color(*NEON_CYAN[:3], 0.08)
-            self._blob3 = Ellipse(size=(dp(220), dp(220)))
+            self._bg_rect = Rectangle(pos=root.pos, size=root.size)
+            Color(*NEON_PINK[:3], 0.04)
+            self._blob1 = Ellipse(size=(dp(350), dp(350)))
+            Color(*NEON_PURPLE[:3], 0.04)
+            self._blob2 = Ellipse(size=(dp(400), dp(400)))
+            Color(*NEON_CYAN[:3], 0.03)
+            self._blob3 = Ellipse(size=(dp(300), dp(300)))
         self._drift_started = False
         root.bind(size=self._upd_bg, pos=self._upd_bg)
-
-        col = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(14))
-        root.add_widget(col)
-
-        # header
-        header = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(12))
+        # Main Scrollable Content
+        main_scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint=(1, 1))
+        col = BoxLayout(orientation="vertical", padding=[dp(20), dp(30), dp(20), dp(40)], spacing=dp(28), size_hint_y=None)
+        col.bind(minimum_height=col.setter('height'))
+        # Header Section
+        header = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(16))
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
         if os.path.exists(icon_path):
-            header.add_widget(KvImage(source=icon_path, size_hint=(None, None), size=(dp(52), dp(52))))
-        title_box = BoxLayout(orientation="vertical", size_hint_x=None, spacing=dp(2))
+            header.add_widget(KvImage(source=icon_path, size_hint=(None, None), size=(dp(56), dp(56))))
+        else:
+            # Fallback beautiful icon
+            fallback = GlassCard(radius=dp(16), size_hint=(None, None), size=(dp(56), dp(56)))
+            fallback.bg_color.rgba = (0.2, 0.2, 0.3, 1)
+            fallback.add_widget(Label(text="SP", font_size="20sp", bold=True, color=NEON_CYAN))
+            header.add_widget(fallback)
+        title_box = BoxLayout(orientation="vertical", size_hint_x=None, spacing=0)
         title_box.bind(minimum_width=title_box.setter("width"))
         title_lbl = Label(
-            text="[b]Save Pro[/b]", markup=True, font_size="26sp",
-            color=TEXT_MAIN, size_hint=(None, None), halign="left",
+            text="Save Pro", font_size="28sp", bold=True,
+            color=TEXT_MAIN, size_hint=(None, None), halign="left"
         )
         title_lbl.bind(texture_size=lambda i, v: setattr(title_lbl, "size", v))
         title_box.add_widget(title_lbl)
         tagline_lbl = Label(
             text=ar("نزّل من أي منصة بلمسة واحدة"),
-            font_size="12sp", color=NEON_CYAN, bold=True,
-            size_hint=(None, None), halign="left",
+            font_size="13sp", color=TEXT_MUTED, bold=True,
+            size_hint=(None, None), halign="left"
         )
         tagline_lbl.bind(texture_size=lambda i, v: setattr(tagline_lbl, "size", v))
         title_box.add_widget(tagline_lbl)
         header.add_widget(title_box)
         header.add_widget(Widget())
         col.add_widget(header)
-
-        # accent strip
-        accent = BoxLayout(size_hint_y=None, height=dp(3))
-        with accent.canvas:
-            Color(*NEON_PINK)
-            self._a1 = RoundedRectangle(radius=[dp(2)] * 4)
-            Color(*NEON_PURPLE)
-            self._a2 = RoundedRectangle(radius=[dp(2)] * 4)
-            Color(*NEON_CYAN)
-            self._a3 = RoundedRectangle(radius=[dp(2)] * 4)
-        accent.bind(pos=self._upd_accent, size=self._upd_accent)
-        col.add_widget(accent)
-
-        # platform selector card
-        sel_card = GlowPanel(glow_color=NEON_PURPLE, radius=dp(20))
-        sel_card.orientation = "vertical"
-        sel_card.padding = [dp(12), dp(14), dp(12), dp(10)]
-        sel_card.spacing = dp(8)
-        sel_card.size_hint_y = None
-        sel_card.height = dp(126)
-        sel_title = Label(
-            text=ar("اختر المنصة"), font_size="12.5sp", bold=True, color=TEXT_MUTED,
-            size_hint_y=None, height=dp(18), halign="left",
+        # Platform Selector (Horizontal Scroll)
+        plat_section = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(180), spacing=dp(12))
+        plat_title = Label(
+            text=ar("اختر المنصة"), font_size="15sp", bold=True, color=TEXT_MAIN,
+            size_hint_y=None, height=dp(20), halign="left", text_size=(Window.width - dp(40), dp(20))
         )
-        sel_card.add_widget(sel_title)
-        chips_row = BoxLayout(spacing=dp(6))
+        plat_section.add_widget(plat_title)
+        h_scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint_y=None, height=dp(140), do_scroll_y=False)
+        chips_row = BoxLayout(orientation="horizontal", spacing=dp(16), size_hint_x=None, padding=[0, dp(4), dp(20), dp(4)])
+        chips_row.bind(minimum_width=chips_row.setter("width"))
         for p in PLATFORMS:
-            chip = PlatformChip(p, on_select=self.select_platform)
+            chip = PlatformCard(p, on_select=self.select_platform)
             self._chips[p["id"]] = chip
             chips_row.add_widget(chip)
-        sel_card.add_widget(chips_row)
-        col.add_widget(sel_card)
-
-        # link input card
-        link_card = GlowPanel(glow_color=NEON_CYAN, radius=dp(20))
-        link_card.orientation = "vertical"
-        link_card.padding = [dp(14), dp(16), dp(14), dp(16)]
-        link_card.spacing = dp(12)
-        link_card.size_hint_y = None
-        link_card.height = dp(168)
+        h_scroll.add_widget(chips_row)
+        plat_section.add_widget(h_scroll)
+        col.add_widget(plat_section)
+        # Link Input Section
+        link_section = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(200), spacing=dp(12))
         self._hint_lbl = Label(
-            text=PLATFORM_BY_ID["instagram"]["hint"], font_size="12.5sp",
-            color=TEXT_MUTED, size_hint_y=None, height=dp(18), halign="left",
+            text=PLATFORM_BY_ID["instagram"]["hint"], font_size="15sp", bold=True,
+            color=TEXT_MAIN, size_hint_y=None, height=dp(20), halign="left", text_size=(Window.width - dp(40), dp(20))
         )
-        link_card.add_widget(self._hint_lbl)
-        input_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(8))
-        self.ui = NeonInput(hint_text=ar("الصق الرابط هنا..."))
+        link_section.add_widget(self._hint_lbl)
+        input_row = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(12))
+        self.ui = PremiumInput(hint_text=ar("الصق الرابط هنا..."))
         input_row.add_widget(self.ui)
-        paste_btn = NeonButton(text=ar("لصق"), color=BTN_MUTED, text_color=NEON_CYAN)
+        paste_btn = PremiumButton(text=ar("لصق"), bg_color=(0.15, 0.15, 0.20, 1), text_color=TEXT_MAIN)
         paste_btn.size_hint_x = None
-        paste_btn.width = dp(64)
+        paste_btn.width = dp(80)
         paste_btn.bind(on_release=self.do_paste)
         input_row.add_widget(paste_btn)
-        link_card.add_widget(input_row)
-        self.preview_btn = NeonButton(text=ar("معاينة"), gradient=(NEON_PINK, NEON_PURPLE), text_color=(1, 1, 1, 1))
+        link_section.add_widget(input_row)
+        self.preview_btn = PremiumButton(text=ar("معاينة"), gradient=(NEON_CYAN, NEON_BLUE), text_color=(1, 1, 1, 1))
         self.preview_btn.bind(on_release=self.do_preview)
-        link_card.add_widget(self.preview_btn)
-        col.add_widget(link_card)
-
-        # preview card slot (filled dynamically after fetching preview)
+        link_section.add_widget(self.preview_btn)
+        col.add_widget(link_section)
+        # Progress Indicator (Hidden by default)
+        self.progress_bar = ShimmerLine()
+        self.progress_bar.opacity = 0
+        col.add_widget(self.progress_bar)
+        # Dynamic Preview Container
         self.preview_container = BoxLayout(orientation="vertical", size_hint_y=None, height=0)
         col.add_widget(self.preview_container)
-
-        # status
-        self.status_lbl = Label(
-            text="", font_size="13sp", color=TEXT_MUTED,
-            size_hint_y=None, height=dp(24),
-        )
-        col.add_widget(self.status_lbl)
-
-        # history card
-        hist_card = GlowPanel(glow_color=NEON_PINK, radius=dp(20))
-        hist_card.orientation = "vertical"
-        hist_card.padding = [dp(14), dp(12), dp(14), dp(12)]
-        hist_card.spacing = dp(6)
+        # Download History Section
+        hist_section = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(12))
+        hist_section.bind(minimum_height=hist_section.setter("height"))
+        hist_title_row = BoxLayout(size_hint_y=None, height=dp(24))
         hist_title = Label(
-            text=ar("التنزيلات الأخيرة"), font_size="12.5sp", bold=True, color=TEXT_MUTED,
-            size_hint_y=None, height=dp(18), halign="left",
+            text=ar("التنزيلات الأخيرة"), font_size="15sp", bold=True, color=TEXT_MAIN,
+            halign="left", text_size=(Window.width - dp(40), dp(24))
         )
-        hist_card.add_widget(hist_title)
-        sc = ScrollView()
-        self.hist_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        hist_title_row.add_widget(hist_title)
+        hist_section.add_widget(hist_title_row)
+        self.hist_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
         self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
-        sc.add_widget(self.hist_list)
-        hist_card.add_widget(sc)
-        col.add_widget(hist_card)
-
+        hist_section.add_widget(self.hist_list)
+        col.add_widget(hist_section)
+        main_scroll.add_widget(col)
+        root.add_widget(main_scroll)
+        # Global Toast Container
+        self.toast = ToastContainer()
+        root.add_widget(self.toast)
         self.select_platform("instagram")
         self._refresh_history()
         return root
 
-    # -- background --
-    def _upd_bg(self, i, v):
-        self._bg_rect.pos = i.pos
-        self._bg_rect.size = i.size
-        self._blob1.pos = (i.x - dp(60), i.y + i.height * 0.72)
-        self._blob2.pos = (i.x + i.width * 0.55, i.y + i.height * 0.55)
-        self._blob3.pos = (i.x + i.width * 0.10, i.y - dp(50))
+    # -- Background Animation --
+    def _upd_bg(self, inst, val):
+        self._bg_rect.pos = inst.pos
+        self._bg_rect.size = inst.size
+        self._blob1.pos = (inst.x - dp(100), inst.y + inst.height * 0.6)
+        self._blob2.pos = (inst.x + inst.width * 0.4, inst.y + inst.height * 0.3)
+        self._blob3.pos = (inst.x + inst.width * 0.1, inst.y - dp(100))
         if not self._drift_started:
             self._drift_started = True
             self._start_drift()
@@ -914,37 +1024,45 @@ class SaveProApp(App):
             anim += Animation(pos=p0, duration=dur, t="in_out_sine")
             anim.repeat = True
             anim.start(ellipse)
-        loop(self._blob1, dp(22), -dp(16), 10)
-        loop(self._blob2, -dp(18), dp(20), 12)
-        loop(self._blob3, dp(14), dp(12), 9)
+        loop(self._blob1, dp(40), -dp(30), 12)
+        loop(self._blob2, -dp(35), dp(40), 15)
+        loop(self._blob3, dp(25), dp(20), 10)
 
-    def _upd_accent(self, i, v):
-        third = i.width / 3
-        self._a1.pos = i.pos
-        self._a1.size = (third, i.height)
-        self._a2.pos = (i.x + third, i.y)
-        self._a2.size = (third, i.height)
-        self._a3.pos = (i.x + third * 2, i.y)
-        self._a3.size = (third, i.height)
-
-    # -- platform selection --
+    # -- Platform Selection --
     def select_platform(self, platform_id):
         self.selected_platform = platform_id
         for pid, chip in self._chips.items():
             chip.set_selected(pid == platform_id)
         p = PLATFORM_BY_ID[platform_id]
         self._hint_lbl.text = p["hint"]
+        self.ui.cursor_color = p["color"]
 
-    # -- preview flow --
+    # -- Interactions --
+    def do_paste(self, *a):
+        try:
+            txt = Clipboard.paste()
+            if not txt or not txt.strip():
+                self.toast.show_toast(ar("لا يوجد نص في الحافظة"), is_error=True)
+                return
+            self.ui.text = txt.strip()
+            Animation(rgba=(*NEON_CYAN[:3], 0.8), duration=0.2).start(self.ui._glow_color)
+            Clock.schedule_once(lambda dt: Animation(rgba=GLASS_BORDER, duration=0.3).start(self.ui._glow_color), 0.3)
+        except Exception:
+            self.toast.show_toast(ar("لا يوجد نص في الحافظة"), is_error=True)
+
     def do_preview(self, *a):
         url = self.ui.text.strip()
         if not url:
-            self.status_lbl.text = ar("الصق الرابط أولاً")
-            self.status_lbl.color = NEON_RED
+            self.toast.show_toast(ar("الصق الرابط أولاً"), is_error=True)
             return
-        self.status_lbl.text = ar("جارٍ تحضير المعاينة...")
-        self.status_lbl.color = NEON_CYAN
         self.preview_btn.disabled = True
+        self.progress_bar.opacity = 1
+        self.progress_bar.start()
+        # Show Skeleton loader in preview container
+        self.preview_container.clear_widgets()
+        skeleton = SkeletonPulseWidget(size_hint_y=None, height=dp(420))
+        self.preview_container.add_widget(skeleton)
+        Animation(height=dp(420), duration=0.4, t='out_quint').start(self.preview_container)
         threading.Thread(target=self._preview_th, args=(url,)).start()
 
     def _preview_th(self, url):
@@ -953,32 +1071,29 @@ class SaveProApp(App):
 
     def _preview_done(self, data, err, url):
         self.preview_btn.disabled = False
+        self.progress_bar.stop(success=not bool(err))
+        Clock.schedule_once(lambda dt: setattr(self.progress_bar, 'opacity', 0), 0.4)
         self.preview_container.clear_widgets()
         if err or not data:
-            Animation(height=0, duration=0.18).start(self.preview_container)
-            self.status_lbl.text = ar("تعذّرت المعاينة: ") + (err or "")
-            self.status_lbl.color = NEON_RED
+            Animation(height=0, duration=0.3, t='in_quint').start(self.preview_container)
+            self.toast.show_toast(ar("تعذّرت المعاينة: ") + (err or ""), is_error=True)
             return
-        self.status_lbl.text = ar("هذا هو المحتوى - اختر ماذا تريد أن تحمّل")
-        self.status_lbl.color = TEXT_MUTED
         platform_color = PLATFORM_BY_ID[self.selected_platform]["color"]
-        card = PreviewCard(
+        card = MediaPreviewCard(
             data, platform_color,
             on_download_video=lambda: self.do_download(url, "video"),
             on_download_audio=lambda: self.do_download(url, "audio"),
             on_play=self.open_player,
         )
+        # Fade in card
+        card.opacity = 0
         self.preview_container.add_widget(card)
-        Animation(height=dp(340), duration=0.22, t="out_cubic").start(self.preview_container)
+        Animation(height=dp(420), duration=0.4, t='out_quint').start(self.preview_container)
+        Animation(opacity=1, duration=0.4).start(card)
 
     def open_player(self, play_url):
-        """Play the preview in the device's own video player/browser (no bundled
-        media-decoder library needed -> keeps the APK build stable)."""
         if not play_url:
-            Popup(
-                title="", size_hint=(0.85, 0.22),
-                content=Label(text=ar("تعذّر تشغيل المعاينة، جرّب التحميل مباشرة"), color=NEON_RED, font_size="13.5sp"),
-            ).open()
+            self.toast.show_toast(ar("تعذّر تشغيل المعاينة، جرّب التحميل مباشرة"), is_error=True)
             return
         try:
             from jnius import autoclass
@@ -996,23 +1111,12 @@ class SaveProApp(App):
             import webbrowser
             webbrowser.open(play_url)
         except Exception:
-            Popup(
-                title="", size_hint=(0.85, 0.22),
-                content=Label(text=ar("تعذّر فتح المعاينة"), color=NEON_RED, font_size="13.5sp"),
-            ).open()
+            self.toast.show_toast(ar("تعذّر فتح المعاينة"), is_error=True)
 
-    def do_paste(self, *a):
-        try:
-            txt = Clipboard.paste()
-            if txt:
-                self.ui.text = txt.strip()
-        except Exception:
-            pass
-
-    # -- download flow (from preview card) --
     def do_download(self, url, kind):
-        self.status_lbl.text = ar("جارٍ التحميل...")
-        self.status_lbl.color = NEON_CYAN
+        self.progress_bar.opacity = 1
+        self.progress_bar.start()
+        self.toast.show_toast(ar("جارٍ التحميل..."))
         threading.Thread(target=self._dl_th, args=(url, self.selected_platform, kind)).start()
 
     def _dl_th(self, url, platform_id, kind):
@@ -1033,26 +1137,30 @@ class SaveProApp(App):
 
     def _dl_done(self, files, err, url, platform_id):
         if err:
-            self.status_lbl.text = ar("فشل: ") + err
-            self.status_lbl.color = NEON_RED
-            return
-        self.status_lbl.text = ar("تم التحميل بنجاح")
-        self.status_lbl.color = NEON_GREEN
-        for f in files:
-            save_history(platform_id, url, f)
-        self.ui.text = ""
-        self.preview_container.clear_widgets()
-        Animation(height=0, duration=0.2).start(self.preview_container)
-        self._refresh_history()
+            self.progress_bar.stop(success=False)
+            self.toast.show_toast(ar("فشل: ") + err, is_error=True)
+        else:
+            self.progress_bar.stop(success=True)
+            self.toast.show_toast(ar("تم التحميل بنجاح"))
+            for f in files:
+                save_history(platform_id, url, f)
+            self.ui.text = ""
+            self.preview_container.clear_widgets()
+            Animation(height=0, duration=0.3, t='in_quint').start(self.preview_container)
+            self._refresh_history()
+        Clock.schedule_once(lambda dt: setattr(self.progress_bar, 'opacity', 0), 0.5)
 
     def _refresh_history(self):
         self.hist_list.clear_widgets()
         rows = get_history(12)
         if not rows:
-            self.hist_list.add_widget(Label(
-                text=ar("لا توجد تنزيلات بعد"), font_size="12.5sp", color=TEXT_FAINT,
-                size_hint_y=None, height=dp(30),
+            empty_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(100), spacing=dp(8))
+            empty_box.add_widget(Label(text="👻", font_size="32sp", size_hint_y=None, height=dp(40)))
+            empty_box.add_widget(Label(
+                text=ar("لا توجد تنزيلات بعد"), font_size="14sp", color=TEXT_FAINT,
+                size_hint_y=None, height=dp(30)
             ))
+            self.hist_list.add_widget(empty_box)
             return
         for platform_id, url, filename, ts in rows:
             self.hist_list.add_widget(HistoryRow(platform_id, filename, ts))
