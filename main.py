@@ -149,6 +149,10 @@ from kivy.animation import Animation
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.effects.dampedscroll import DampedScrollEffect
+from kivy.uix.video import Video
+from kivy.uix.modalview import ModalView
+from kivy.uix.slider import Slider
+from kivy.uix.button import Button
 
 Window.softinput_mode = "pan"
 
@@ -278,19 +282,28 @@ def get_ua():
     return random.choice(UAS)
 
 # ---------------------------------------------------------------------------
-# Platform definitions
+# Platform definitions (real icons via CDN, no local files needed)
 # ---------------------------------------------------------------------------
+# CDN URLs for platform icons (PNG)
+ICON_URLS = {
+    "instagram": "https://img.icons8.com/fluency/48/instagram-new.png",
+    "tiktok": "https://img.icons8.com/fluency/48/tiktok.png",
+    "facebook": "https://img.icons8.com/fluency/48/facebook.png",
+    "x": "https://img.icons8.com/fluency/48/twitterx.png",
+    "pinterest": "https://img.icons8.com/fluency/48/pinterest.png",
+}
+
 PLATFORMS = [
-    {"id": "instagram", "icon": "IG", "label": ar("انستقرام"),
-     "color": NEON_PINK, "hint": ar("الصق رابط ريلز أو منشور من انستقرام")},
-    {"id": "tiktok", "icon": "TT", "label": ar("تيك توك"),
-     "color": NEON_CYAN, "hint": ar("الصق رابط فيديو من تيك توك")},
-    {"id": "facebook", "icon": "f", "label": ar("فيسبوك"),
-     "color": NEON_BLUE, "hint": ar("الصق رابط فيديو أو ريلز من فيسبوك")},
-    {"id": "x", "icon": "X", "label": "X",
-     "color": TEXT_MAIN, "hint": ar("الصق رابط فيديو من منصة X")},
-    {"id": "pinterest", "icon": "P", "label": ar("بنترست"),
-     "color": NEON_RED, "hint": ar("الصق رابط بن من بنترست")},
+    {"id": "instagram", "label": ar("انستقرام"),
+     "color": NEON_PINK, "hint": ar("الصق رابط ريلز أو منشور من انستقرام"), "letter": "I"},
+    {"id": "tiktok", "label": ar("تيك توك"),
+     "color": NEON_CYAN, "hint": ar("الصق رابط فيديو من تيك توك"), "letter": "T"},
+    {"id": "facebook", "label": ar("فيسبوك"),
+     "color": NEON_BLUE, "hint": ar("الصق رابط فيديو أو ريلز من فيسبوك"), "letter": "F"},
+    {"id": "x", "label": "X",
+     "color": TEXT_MAIN, "hint": ar("الصق رابط فيديو من منصة X"), "letter": "X"},
+    {"id": "pinterest", "label": ar("بنترست"),
+     "color": NEON_RED, "hint": ar("الصق رابط بن من بنترست"), "letter": "P"},
 ]
 PLATFORM_BY_ID = {p["id"]: p for p in PLATFORMS}
 
@@ -527,7 +540,7 @@ class PremiumButton(ElasticBehavior, BoxLayout):
         self._fill.size = self.size
 
 class PlatformCard(ElasticBehavior, GlassCard):
-    """Premium 2026 App Store style platform card."""
+    """Premium 2026 App Store style platform card with real icon from CDN."""
     def __init__(self, platform, on_select=None, **kwargs):
         super().__init__(radius=dp(22), **kwargs)
         self.orientation = "vertical"
@@ -537,6 +550,7 @@ class PlatformCard(ElasticBehavior, GlassCard):
         self.spacing = dp(8)
         self.platform = platform
         self.on_select = on_select
+        # Icon container with circular background
         icon_wrap = AnchorLayout(size_hint_y=None, height=dp(56))
         self.icon_bg = Widget(size_hint=(None, None), size=(dp(56), dp(56)))
         with self.icon_bg.canvas:
@@ -546,10 +560,25 @@ class PlatformCard(ElasticBehavior, GlassCard):
             self._icon_bg_el = Ellipse(pos=self.icon_bg.pos, size=self.icon_bg.size)
         self.icon_bg.bind(pos=self._upd_icon, size=self._upd_icon)
         icon_wrap.add_widget(self.icon_bg)
-        self._mono = Label(
-            text=platform["icon"], font_size="20sp", bold=True, color=TEXT_MAIN
+        # Real icon from CDN
+        icon_url = ICON_URLS.get(platform["id"])
+        self.icon_img = AsyncImage(
+            source=icon_url,
+            size_hint=(None, None),
+            size=(dp(32), dp(32)),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5}
         )
-        icon_wrap.add_widget(self._mono)
+        # Fallback label (if image fails to load)
+        self.fallback_label = Label(
+            text=platform.get("letter", platform["id"][0].upper()),
+            font_size="20sp", bold=True, color=TEXT_MAIN,
+            size_hint=(None, None), size=(dp(32), dp(32)),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5}
+        )
+        self.fallback_label.opacity = 0  # hidden by default
+        self.icon_img.bind(on_error=lambda inst, val: setattr(self.fallback_label, 'opacity', 1))
+        icon_wrap.add_widget(self.icon_img)
+        icon_wrap.add_widget(self.fallback_label)
         self.add_widget(icon_wrap)
         self._label = Label(
             text=platform["label"], font_size="13sp", color=TEXT_MUTED, bold=True,
@@ -573,21 +602,19 @@ class PlatformCard(ElasticBehavior, GlassCard):
             Animation(color=TEXT_MAIN, duration=0.2).start(self._label)
             Animation(rgba=GLASS_BORDER_ACTIVE, duration=0.2).start(self.border_color)
             Animation(rgba=(0.12, 0.12, 0.16, 0.9), duration=0.2).start(self.bg_color)
-            self._mono.color = (0.05, 0.05, 0.08, 1)
         else:
             Animation(rgba=(*self.platform["color"][:3], 0.0), duration=0.2).start(self._glow_c)
             Animation(rgba=(0.12, 0.12, 0.15, 1), duration=0.2).start(self._icon_c)
             Animation(color=TEXT_MUTED, duration=0.2).start(self._label)
             Animation(rgba=GLASS_BORDER, duration=0.2).start(self.border_color)
             Animation(rgba=GLASS_BG, duration=0.2).start(self.bg_color)
-            self._mono.color = TEXT_MAIN
 
     def on_release(self):
         if self.on_select:
             self.on_select(self.platform["id"])
 
 # ---------------------------------------------------------------------------
-# Icons
+# Icons (for download/audio buttons)
 # ---------------------------------------------------------------------------
 class _DownloadArrowIcon(Widget):
     def __init__(self, color=(1, 1, 1, 1), **kwargs):
@@ -781,8 +808,24 @@ class HistoryRow(ElasticBehavior, GlassCard):
             self._ebg = Ellipse(pos=icon_bg.pos, size=icon_bg.size)
         icon_bg.bind(pos=lambda i, v: setattr(self._ebg, "pos", v))
         icon_box.add_widget(icon_bg)
-        icon_lbl = Label(text=p["icon"], font_size="16sp", bold=True, color=p["color"])
-        icon_box.add_widget(icon_lbl)
+        # Use CDN icon
+        icon_url = ICON_URLS.get(p["id"])
+        icon_img = AsyncImage(
+            source=icon_url,
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+            pos_hint={'center_x':0.5, 'center_y':0.5}
+        )
+        fallback = Label(
+            text=p.get("letter", p["id"][0].upper()),
+            font_size="14sp", bold=True, color=p["color"],
+            size_hint=(None, None), size=(dp(24), dp(24)),
+            pos_hint={'center_x':0.5, 'center_y':0.5}
+        )
+        fallback.opacity = 0
+        icon_img.bind(on_error=lambda inst, val: setattr(fallback, 'opacity', 1))
+        icon_box.add_widget(icon_img)
+        icon_box.add_widget(fallback)
         self.add_widget(icon_box)
         text_box = BoxLayout(orientation="vertical", spacing=dp(2))
         name = os.path.basename(filename) if filename else "-"
@@ -882,6 +925,55 @@ class MediaPreviewCard(GlassCard):
         self._thumb_bg.size = inst.size
         self._thumb_mask_after.pos = inst.pos
         self._thumb_mask_after.size = inst.size
+
+# ---------------------------------------------------------------------------
+# Internal Video Player (ModalView)
+# ---------------------------------------------------------------------------
+class VideoPlayerPopup(ModalView):
+    def __init__(self, video_url, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (0.9, 0.7)
+        self.auto_dismiss = True
+        layout = BoxLayout(orientation='vertical', padding=dp(10), spacing=dp(10))
+        self.video = Video(source=video_url, state='play', options={'allow_stretch': True})
+        layout.add_widget(self.video)
+        controls = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
+        # Play/Pause button
+        self.play_pause_btn = Button(text='Pause', size_hint_x=None, width=dp(80))
+        self.play_pause_btn.bind(on_release=self.toggle_play)
+        controls.add_widget(self.play_pause_btn)
+        # Restart button
+        restart_btn = Button(text='Restart', size_hint_x=None, width=dp(80))
+        restart_btn.bind(on_release=lambda x: setattr(self.video, 'position', 0))
+        controls.add_widget(restart_btn)
+        # Progress slider (optional)
+        self.slider = Slider(min=0, max=1, value=0, size_hint_x=1)
+        self.slider.bind(value=self.on_slider_move)
+        controls.add_widget(self.slider)
+        layout.add_widget(controls)
+        self.add_widget(layout)
+        # Update slider periodically
+        Clock.schedule_interval(self.update_slider, 0.5)
+
+    def toggle_play(self, instance):
+        if self.video.state == 'play':
+            self.video.state = 'pause'
+            self.play_pause_btn.text = 'Play'
+        else:
+            self.video.state = 'play'
+            self.play_pause_btn.text = 'Pause'
+
+    def update_slider(self, dt):
+        if self.video.duration > 0:
+            self.slider.value = self.video.position / self.video.duration
+
+    def on_slider_move(self, instance, value):
+        if self.video.duration > 0:
+            self.video.position = value * self.video.duration
+
+    def on_dismiss(self):
+        Clock.unschedule(self.update_slider)
+        self.video.state = 'stop'
 
 # ---------------------------------------------------------------------------
 # Main App Layout
@@ -996,6 +1088,14 @@ class SaveProApp(App):
         self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
         hist_section.add_widget(self.hist_list)
         col.add_widget(hist_section)
+        # Copyright footer (English)
+        footer = BoxLayout(size_hint_y=None, height=dp(30))
+        footer.add_widget(Label(
+            text="© 2026 Youssef Mansouri",
+            font_size="12sp", color=TEXT_FAINT, halign='center', valign='middle',
+            size_hint=(1,1)
+        ))
+        col.add_widget(footer)
         main_scroll.add_widget(col)
         root.add_widget(main_scroll)
         # Global Toast Container
@@ -1095,28 +1195,14 @@ class SaveProApp(App):
         if not play_url:
             self.toast.show_toast(ar("تعذّر تشغيل المعاينة، جرّب التحميل مباشرة"), is_error=True)
             return
-        try:
-            from jnius import autoclass
-            Intent = autoclass("android.content.Intent")
-            Uri = autoclass("android.net.Uri")
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            intent = Intent(Intent.ACTION_VIEW)
-            intent.setDataAndType(Uri.parse(play_url), "video/*")
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            PythonActivity.mActivity.startActivity(intent)
-            return
-        except Exception:
-            pass
-        try:
-            import webbrowser
-            webbrowser.open(play_url)
-        except Exception:
-            self.toast.show_toast(ar("تعذّر فتح المعاينة"), is_error=True)
+        # Use internal video player
+        popup = VideoPlayerPopup(play_url)
+        popup.open()
 
     def do_download(self, url, kind):
         self.progress_bar.opacity = 1
         self.progress_bar.start()
-        self.toast.show_toast(ar("جارٍ التحميل..."))
+        self.toast.show_toast("Downloading...")  # English
         threading.Thread(target=self._dl_th, args=(url, self.selected_platform, kind)).start()
 
     def _dl_th(self, url, platform_id, kind):
@@ -1141,7 +1227,7 @@ class SaveProApp(App):
             self.toast.show_toast(ar("فشل: ") + err, is_error=True)
         else:
             self.progress_bar.stop(success=True)
-            self.toast.show_toast(ar("تم التحميل بنجاح"))
+            self.toast.show_toast("Download complete")  # English
             for f in files:
                 save_history(platform_id, url, f)
             self.ui.text = ""
