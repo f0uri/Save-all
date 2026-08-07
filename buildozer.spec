@@ -6,10 +6,11 @@ package.domain = com.youssefmansouri
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 1.0
-requirements = python3,kivy==2.3.1,requests,yt-dlp,sqlite3,urllib3,charset_normalizer,certifi,idna
+
+requirements = python3,kivy==2.3.1,ffpyplayer,requests,yt-dlp,sqlite3,urllib3,charset_normalizer,certifi,idna
+
 orientation = portrait
 fullscreen = 0
-
 android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE
 android.api = 34
 android.minapi = 21
