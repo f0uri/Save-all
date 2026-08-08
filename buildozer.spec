@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf
 version = 1.0
 
-requirements = python3,kivy,yt_dlp,sqlite3,ffpyplayer,urllib3,requests
+requirements = python3,kivy,yt_dlp,sqlite3,urllib3,requests
 
 orientation = portrait
 fullscreen = 0
