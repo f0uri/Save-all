@@ -28,9 +28,9 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-${{ runner.os }}-
+            buildozer-v2-${{ runner.os }}-
 
       - name: Install system dependencies
         run: |
@@ -40,7 +40,7 @@ jobs:
             autoconf libtool pkg-config zlib1g-dev \
             libncurses-dev libncursesw5-dev cmake \
             libffi-dev libssl-dev
-          pip install --upgrade buildozer cython
+          pip install "buildozer==1.6.0" cython
           pip install -r requirements.txt
 
       - name: Build APK
