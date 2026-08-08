@@ -272,6 +272,42 @@ def get_history(limit=12):
     except Exception:
         return []
 
+def get_history_full(limit=500):
+    """Returns rows including id, for the Downloads / History screens."""
+    try:
+        if DB_PATH is None:
+            init_db()
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, platform, url, filename, created_at FROM history ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+def delete_history_entry(entry_id):
+    try:
+        if DB_PATH is None:
+            init_db()
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM history WHERE id=?", (entry_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+def _file_size_str(path):
+    try:
+        n = os.path.getsize(path)
+        return f"{n / (1024 * 1024):.1f} MB"
+    except Exception:
+        return "—"
+
 UAS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
@@ -457,6 +493,10 @@ class ElasticBehavior(ButtonBehavior):
         Animation.cancel_all(self.scale_instr)
         Animation(x=1, y=1, z=1, duration=0.4, t='out_elastic').start(self.scale_instr)
         return res
+
+class TapArea(ElasticBehavior, BoxLayout):
+    """Generic tappable container (icon buttons, list rows, etc.)."""
+    pass
 
 class GlassCard(BoxLayout):
     """Modern Glassmorphism card."""
@@ -928,6 +968,374 @@ class MediaPreviewCard(GlassCard):
         self._thumb_mask_after.size = inst.size
 
 # ---------------------------------------------------------------------------
+# Local file player (for already-downloaded items in Downloads / History)
+# ---------------------------------------------------------------------------
+class LocalVideoPlayerPopup(ModalView):
+    """Lightweight player for a file already saved on disk."""
+    def __init__(self, path, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (1, 1)
+        self.auto_dismiss = False
+        self.background_color = (0, 0, 0, 0.98)
+        root = FloatLayout()
+        try:
+            from kivy.uix.videoplayer import VideoPlayer
+            player = VideoPlayer(source=path, state="play",
+                                  options={"allow_stretch": True, "eos": "stop"})
+            player.size_hint = (1, 1)
+            root.add_widget(player)
+        except Exception as e:
+            err = Label(text=ar("تعذر تشغيل الملف: ") + str(e), color=TEXT_MAIN,
+                        font_size="14sp", halign="center",
+                        pos_hint={"center_x": 0.5, "center_y": 0.5})
+            root.add_widget(err)
+        close_btn = Button(
+            text='✕', size_hint=(None, None), size=(dp(44), dp(44)),
+            pos_hint={'right': 0.98, 'top': 0.98},
+            background_normal='', background_color=(0.15, 0.15, 0.15, 0.7),
+            color=(1, 1, 1, 1), font_size='18sp', bold=True
+        )
+        close_btn.bind(on_release=lambda *a: self.dismiss())
+        root.add_widget(close_btn)
+        self.add_widget(root)
+
+# ---------------------------------------------------------------------------
+# Glass Segmented Control (All / Videos / Audio)
+# ---------------------------------------------------------------------------
+class GlassSegmentedControl(GlassCard):
+    def __init__(self, items, on_select=None, **kwargs):
+        super().__init__(radius=dp(16), **kwargs)
+        self.size_hint_y = None
+        self.height = dp(44)
+        self.padding = [dp(4), dp(4), dp(4), dp(4)]
+        self.spacing = dp(4)
+        self.bg_color.rgba = (1, 1, 1, 0.05)
+        self.border_color.rgba = GLASS_BORDER
+        self.on_select = on_select
+        self._buttons = []
+        self.selected_index = 0
+        for i, label in enumerate(items):
+            btn = TapArea()
+            box = BoxLayout()
+            with box.canvas.before:
+                fill_c = Color(0, 0, 0, 0)
+                fill_r = RoundedRectangle(radius=[dp(12)])
+            box.bind(pos=lambda inst, val, r=fill_r: setattr(r, "pos", inst.pos),
+                     size=lambda inst, val, r=fill_r: setattr(r, "size", inst.size))
+            lbl = Label(text=label, font_size="13sp", bold=True, color=TEXT_MUTED)
+            box.add_widget(lbl)
+            btn.add_widget(box)
+            btn._fill_color = fill_c
+            btn._label = lbl
+            btn.bind(on_release=lambda inst, idx=i: self.select(idx))
+            self.add_widget(btn)
+            self._buttons.append(btn)
+        self.select(0, silent=True)
+
+    def select(self, idx, silent=False):
+        self.selected_index = idx
+        for i, btn in enumerate(self._buttons):
+            if i == idx:
+                Animation(rgba=(*NEON_BLUE[:3], 0.9), duration=0.15).start(btn._fill_color)
+                Animation(color=(1, 1, 1, 1), duration=0.15).start(btn._label)
+            else:
+                Animation(rgba=(0, 0, 0, 0), duration=0.15).start(btn._fill_color)
+                Animation(color=TEXT_MUTED, duration=0.15).start(btn._label)
+        if not silent and self.on_select:
+            self.on_select(idx)
+
+# ---------------------------------------------------------------------------
+# Small platform filter chip (Downloads screen)
+# ---------------------------------------------------------------------------
+class FilterChip(ElasticBehavior, GlassCard):
+    def __init__(self, label, on_select=None, **kwargs):
+        super().__init__(radius=dp(16), **kwargs)
+        self.size_hint = (None, None)
+        self.height = dp(32)
+        self.padding = [dp(14), dp(6), dp(14), dp(6)]
+        self.label_text = label
+        self.on_select_cb = on_select
+        self._lbl = Label(text=label, font_size="12sp", bold=True, color=TEXT_MUTED)
+        self._lbl.bind(texture_size=lambda i, v: setattr(self, "width", v[0] + dp(28)))
+        self.add_widget(self._lbl)
+        self.set_selected(False)
+
+    def set_selected(self, selected):
+        if selected:
+            Animation(rgba=(*NEON_BLUE[:3], 0.85), duration=0.15).start(self.bg_color)
+            Animation(rgba=(*NEON_BLUE[:3], 0.9), duration=0.15).start(self.border_color)
+            Animation(color=(1, 1, 1, 1), duration=0.15).start(self._lbl)
+        else:
+            Animation(rgba=GLASS_BG, duration=0.15).start(self.bg_color)
+            Animation(rgba=GLASS_BORDER, duration=0.15).start(self.border_color)
+            Animation(color=TEXT_MUTED, duration=0.15).start(self._lbl)
+
+    def on_release(self):
+        if self.on_select_cb:
+            self.on_select_cb(self.label_text)
+
+# ---------------------------------------------------------------------------
+# Downloads list item (thumbnail-like icon, meta, options button)
+# ---------------------------------------------------------------------------
+class DownloadItemCard(ElasticBehavior, GlassCard):
+    def __init__(self, entry_id, platform_id, filename, ts, on_more=None, on_play=None, **kwargs):
+        super().__init__(radius=dp(18), **kwargs)
+        self.entry_id = entry_id
+        self.platform_id = platform_id
+        self.filename = filename
+        self.size_hint_y = None
+        self.height = dp(76)
+        self.padding = [dp(10), dp(10), dp(10), dp(10)]
+        self.spacing = dp(12)
+        self.bg_color.rgba = (0.0, 0.21, 0.48, 0.18)
+        self.border_color.rgba = (*NEON_BLUE[:3], 0.5)
+        p = PLATFORM_BY_ID.get(platform_id, PLATFORMS[0])
+        # Thumbnail with play overlay
+        thumb = TapArea(size_hint=(None, None), size=(dp(56), dp(56)))
+        with thumb.canvas.before:
+            Color(*p["color"][:3], 0.22)
+            thumb_bg = RoundedRectangle(radius=[dp(14)], pos=thumb.pos, size=thumb.size)
+        thumb.bind(pos=lambda i, v: setattr(thumb_bg, "pos", v),
+                   size=lambda i, v: setattr(thumb_bg, "size", v))
+        play_icon = _PlayTriangleIcon(color=(1, 1, 1, 0.9), size=(dp(18), dp(18)),
+                                       pos_hint={"center_x": 0.5, "center_y": 0.5})
+        anchor = AnchorLayout()
+        anchor.add_widget(play_icon)
+        thumb.add_widget(anchor)
+        thumb.bind(on_release=lambda *a: on_play and on_play())
+        self.add_widget(thumb)
+        # Text column
+        col = BoxLayout(orientation="vertical", spacing=dp(3))
+        top_row = BoxLayout(size_hint_y=None, height=dp(16), spacing=dp(6))
+        top_row.add_widget(Label(text=p["label"], font_size="10sp", bold=True, color=p["color"],
+                                  size_hint_x=None, width=dp(70), halign="left", valign="middle"))
+        col.add_widget(top_row)
+        name = os.path.basename(filename) if filename else "-"
+        col.add_widget(Label(text=name, font_size="13sp", bold=True, color=TEXT_MAIN,
+                              halign="left", valign="middle", shorten=True, shorten_from="right",
+                              text_size=(dp(190), dp(18)), size_hint_y=None, height=dp(18)))
+        import datetime
+        date_str = datetime.datetime.fromtimestamp(ts).strftime("%d %b, %H:%M") if ts else ""
+        size_str = _file_size_str(filename) if filename else "—"
+        col.add_widget(Label(text=f"{size_str} • {date_str} • ✓", font_size="10sp",
+                              color=NEON_GREEN, halign="left", valign="middle",
+                              text_size=(dp(190), dp(14)), size_hint_y=None, height=dp(14)))
+        self.add_widget(col)
+        # More options button
+        more_btn = TapArea(size_hint=(None, None), size=(dp(32), dp(32)))
+        more_lbl = Label(text="⋮", font_size="20sp", bold=True, color=TEXT_MUTED)
+        more_btn.add_widget(more_lbl)
+        more_btn.bind(on_release=lambda *a: on_more and on_more())
+        self.add_widget(more_btn)
+
+# ---------------------------------------------------------------------------
+# History list item (with inline share / delete)
+# ---------------------------------------------------------------------------
+class HistoryItemCard(GlassCard):
+    def __init__(self, entry_id, platform_id, filename, ts, on_play=None, on_share=None, on_delete=None, **kwargs):
+        super().__init__(radius=dp(16), **kwargs)
+        self.size_hint_y = None
+        self.height = dp(70)
+        self.padding = [dp(10), dp(8), dp(10), dp(8)]
+        self.spacing = dp(12)
+        self.bg_color.rgba = (0.1, 0.1, 0.13, 0.5)
+        p = PLATFORM_BY_ID.get(platform_id, PLATFORMS[0])
+        thumb = TapArea(size_hint=(None, None), size=(dp(50), dp(50)))
+        with thumb.canvas.before:
+            Color(*p["color"][:3], 0.22)
+            thumb_bg = RoundedRectangle(radius=[dp(12)], pos=thumb.pos, size=thumb.size)
+        thumb.bind(pos=lambda i, v: setattr(thumb_bg, "pos", v),
+                   size=lambda i, v: setattr(thumb_bg, "size", v))
+        play_icon = _PlayTriangleIcon(color=(1, 1, 1, 0.9), size=(dp(16), dp(16)),
+                                       pos_hint={"center_x": 0.5, "center_y": 0.5})
+        anchor = AnchorLayout()
+        anchor.add_widget(play_icon)
+        thumb.add_widget(anchor)
+        thumb.bind(on_release=lambda *a: on_play and on_play())
+        self.add_widget(thumb)
+        col = BoxLayout(orientation="vertical", spacing=dp(3))
+        name = os.path.basename(filename) if filename else "-"
+        col.add_widget(Label(text=name, font_size="12sp", bold=True, color=TEXT_MAIN,
+                              halign="left", valign="bottom", shorten=True, shorten_from="right",
+                              text_size=(dp(150), dp(18))))
+        import datetime
+        time_str = datetime.datetime.fromtimestamp(ts).strftime("%H:%M") if ts else ""
+        size_str = _file_size_str(filename) if filename else "—"
+        col.add_widget(Label(text=f"{size_str} • {time_str}", font_size="10sp", color=TEXT_FAINT,
+                              halign="left", valign="top", text_size=(dp(150), dp(16))))
+        self.add_widget(col)
+        actions = BoxLayout(size_hint_x=None, width=dp(70), spacing=dp(4))
+        share_btn = TapArea(size_hint=(None, None), size=(dp(32), dp(32)))
+        share_btn.add_widget(Label(text="⇪", font_size="16sp", color=TEXT_MUTED))
+        share_btn.bind(on_release=lambda *a: on_share and on_share())
+        actions.add_widget(share_btn)
+        del_btn = TapArea(size_hint=(None, None), size=(dp(32), dp(32)))
+        del_btn.add_widget(Label(text="🗑", font_size="15sp", color=NEON_RED))
+        del_btn.bind(on_release=lambda *a: on_delete and on_delete())
+        actions.add_widget(del_btn)
+        self.add_widget(actions)
+
+# ---------------------------------------------------------------------------
+# Video action bottom sheet (Play / Share / Delete)
+# ---------------------------------------------------------------------------
+class VideoActionSheet(ModalView):
+    def __init__(self, platform_id, filename, on_play=None, on_share=None, on_delete=None, **kwargs):
+        kwargs.setdefault("size_hint", (1, None))
+        super().__init__(**kwargs)
+        self.auto_dismiss = True
+        self.background_color = (0, 0, 0, 0.55)
+        self.pos_hint = {"bottom": 1}
+        p = PLATFORM_BY_ID.get(platform_id, PLATFORMS[0])
+        sheet = GlassCard(radius=dp(28), orientation="vertical",
+                           padding=[dp(20), dp(20), dp(20), dp(24)], spacing=dp(4),
+                           size_hint_y=None)
+        sheet.bg_color.rgba = (0.08, 0.09, 0.12, 0.98)
+        sheet.border_color.rgba = GLASS_BORDER_ACTIVE
+        header = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        header.add_widget(Label(text=p["label"], font_size="11sp", bold=True, color=p["color"],
+                                 size_hint_x=None, width=dp(70)))
+        name = os.path.basename(filename) if filename else "-"
+        header.add_widget(Label(text=name, font_size="14sp", bold=True, color=TEXT_MAIN,
+                                 shorten=True, shorten_from="right", halign="left",
+                                 text_size=(dp(220), dp(28))))
+        sheet.add_widget(header)
+        sheet.add_widget(Widget(size_hint_y=None, height=dp(12)))
+
+        def _row(icon, text, color, cb):
+            row = TapArea(size_hint_y=None, height=dp(50))
+            inner = BoxLayout(spacing=dp(14), padding=[dp(4), 0, dp(4), 0])
+            inner.add_widget(Label(text=icon, font_size="18sp", color=color,
+                                    size_hint_x=None, width=dp(28)))
+            inner.add_widget(Label(text=ar(text), font_size="14sp", bold=True, color=color,
+                                    halign="left", valign="middle", text_size=(dp(220), dp(50))))
+            row.add_widget(inner)
+            row.bind(on_release=lambda *a: (cb() if cb else None, self.dismiss()))
+            sheet.add_widget(row)
+
+        _row("▶", "تشغيل", TEXT_MAIN, on_play)
+        _row("⇪", "مشاركة", TEXT_MAIN, on_share)
+        _row("🗑", "حذف", NEON_RED, on_delete)
+        sheet.height = dp(28 + 12 + 50 * 3 + 40)
+        self.height = sheet.height
+        self.add_widget(sheet)
+
+# ---------------------------------------------------------------------------
+# Delete confirmation dialog
+# ---------------------------------------------------------------------------
+class DeleteConfirmPopup(ModalView):
+    def __init__(self, on_confirm=None, **kwargs):
+        kwargs.setdefault("size_hint", (0.85, None))
+        super().__init__(**kwargs)
+        self.auto_dismiss = True
+        self.background_color = (0, 0, 0, 0.6)
+        self.height = dp(190)
+        card = GlassCard(radius=dp(24), orientation="vertical",
+                          padding=[dp(20), dp(20), dp(20), dp(20)], spacing=dp(10),
+                          size_hint_y=None, height=dp(190))
+        card.bg_color.rgba = (0.08, 0.09, 0.12, 0.98)
+        card.border_color.rgba = (*NEON_RED[:3], 0.3)
+        card.add_widget(Label(text=ar("حذف هذا الملف؟"), font_size="17sp", bold=True,
+                               color=NEON_RED, size_hint_y=None, height=dp(24),
+                               halign="left", text_size=(dp(260), dp(24))))
+        card.add_widget(Label(text=ar("لا يمكن التراجع عن هذا الإجراء."), font_size="13sp",
+                               color=TEXT_MUTED, size_hint_y=None, height=dp(36),
+                               halign="left", text_size=(dp(260), dp(36))))
+        btn_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        cancel_btn = PremiumButton(text=ar("إلغاء"), bg_color=(0.15, 0.15, 0.18, 1), text_color=TEXT_MAIN)
+        cancel_btn.bind(on_release=lambda *a: self.dismiss())
+        btn_row.add_widget(cancel_btn)
+        del_btn = PremiumButton(text=ar("حذف"), bg_color=NEON_RED, text_color=(1, 1, 1, 1))
+        del_btn.bind(on_release=lambda *a: (on_confirm() if on_confirm else None, self.dismiss()))
+        btn_row.add_widget(del_btn)
+        card.add_widget(btn_row)
+        self.add_widget(card)
+
+# ---------------------------------------------------------------------------
+# Glass Bottom Navigation Bar
+# ---------------------------------------------------------------------------
+class NavTab(ElasticBehavior, BoxLayout):
+    def __init__(self, key, icon, label, on_select=None, **kwargs):
+        super().__init__(**kwargs)
+        self.key = key
+        self.on_select_cb = on_select
+        self.padding = [dp(10), dp(6), dp(10), dp(6)]
+        self.spacing = dp(6)
+        with self.canvas.before:
+            self._fill_color = Color(0, 0, 0, 0)
+            self._fill = RoundedRectangle(radius=[dp(17)])
+        self.bind(pos=self._upd, size=self._upd)
+        self._icon_lbl = Label(text=icon, font_size="16sp", color=TEXT_MUTED,
+                                size_hint=(None, None), size=(dp(20), dp(20)))
+        self.add_widget(self._icon_lbl)
+        self._text_lbl = Label(text=ar(label), font_size="12sp", bold=True, color=(1, 1, 1, 1),
+                                size_hint=(None, None), width=0, opacity=0)
+        self._text_lbl.bind(texture_size=lambda i, v: setattr(self._text_lbl, "height", v[1]))
+        self.add_widget(self._text_lbl)
+
+    def _upd(self, *a):
+        self._fill.pos = self.pos
+        self._fill.size = self.size
+
+    def set_selected(self, selected):
+        if selected:
+            Animation(rgba=(1, 1, 1, 1), duration=0.15).start(self._fill_color)
+            self._fill.texture = _get_gradient_texture(NEON_BLUE, NEON_CYAN)
+            Animation(color=(1, 1, 1, 1), duration=0.15).start(self._icon_lbl)
+            self._text_lbl.width = dp(64)
+            Animation(opacity=1, duration=0.15).start(self._text_lbl)
+        else:
+            self._fill.texture = None
+            Animation(rgba=(0, 0, 0, 0), duration=0.15).start(self._fill_color)
+            Animation(color=TEXT_MUTED, duration=0.15).start(self._icon_lbl)
+            self._text_lbl.width = 0
+            Animation(opacity=0, duration=0.15).start(self._text_lbl)
+
+    def on_release(self):
+        if self.on_select_cb:
+            self.on_select_cb(self.key)
+
+class GlassBottomNav(FloatLayout):
+    TABS = [
+        ("home", "⌂", "الرئيسية"),
+        ("downloads", "⬇", "التنزيلات"),
+        ("history", "🕘", "السجل"),
+        ("settings", "⚙", "الإعدادات"),
+    ]
+
+    def __init__(self, on_select=None, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (1, None)
+        self.height = dp(88)
+        self.on_select_cb = on_select
+        bar = BoxLayout(size_hint=(1, None), height=dp(68), spacing=dp(4),
+                         padding=[dp(8), dp(8), dp(8), dp(8)],
+                         pos_hint={"center_x": 0.5, "center_y": 0.5})
+        with bar.canvas.before:
+            Color(1, 1, 1, 0.10)
+            self._bar_bg = RoundedRectangle(radius=[dp(32)])
+            Color(1, 1, 1, 0.18)
+            self._bar_border = Line(rounded_rectangle=(0, 0, 0, 0, dp(32)), width=dp(1))
+        bar.bind(pos=self._upd_bar, size=self._upd_bar)
+        self._tabs = {}
+        for key, icon, label in self.TABS:
+            t = NavTab(key, icon, label, on_select=self._select)
+            self._tabs[key] = t
+            bar.add_widget(t)
+        self.add_widget(bar)
+        self._select("home", silent=True)
+
+    def _upd_bar(self, inst, val):
+        self._bar_bg.pos = inst.pos
+        self._bar_bg.size = inst.size
+        self._bar_border.rounded_rectangle = _rr(inst.pos, inst.size, dp(32))
+
+    def _select(self, key, silent=False):
+        for k, t in self._tabs.items():
+            t.set_selected(k == key)
+        if not silent and self.on_select_cb:
+            self.on_select_cb(key)
+
+# ---------------------------------------------------------------------------
 # Internal Video Player - PROFESSIONAL FIXED VERSION
 # ---------------------------------------------------------------------------
 class VideoPlayerPopup(ModalView):
@@ -1266,6 +1674,7 @@ class SaveProApp(App):
         self.title = "Save Pro"
         init_db()
         self.selected_platform = "instagram"
+        self.current_tab = "home"
         self._chips = {}
         # Root layout with dynamic animated background
         root = FloatLayout()
@@ -1280,9 +1689,41 @@ class SaveProApp(App):
             self._blob3 = Ellipse(size=(dp(300), dp(300)))
         self._drift_started = False
         root.bind(size=self._upd_bg, pos=self._upd_bg)
+
+        # Screen container (swapped when switching tabs) + fixed glass bottom nav
+        self.screen_container = FloatLayout(size_hint=(1, 1))
+        root.add_widget(self.screen_container)
+        self.bottom_nav = GlassBottomNav(on_select=self.show_screen)
+        self.bottom_nav.pos_hint = {"center_x": 0.5, "y": 0}
+        root.add_widget(self.bottom_nav)
+
+        # Global Toast Container (always on top)
+        self.toast = ToastContainer()
+        root.add_widget(self.toast)
+
+        self.show_screen("home")
+        self.select_platform("instagram")
+        return root
+
+    # -- Screen switching --
+    def show_screen(self, key, silent=False):
+        self.current_tab = key
+        self.screen_container.clear_widgets()
+        if key == "home":
+            self.screen_container.add_widget(self._build_home_screen())
+        elif key == "downloads":
+            self.screen_container.add_widget(self._build_downloads_screen())
+        elif key == "history":
+            self.screen_container.add_widget(self._build_history_screen())
+        elif key == "settings":
+            self.screen_container.add_widget(self._build_settings_screen())
+        if not silent:
+            self.bottom_nav._select(key, silent=True)
+
+    def _build_home_screen(self):
         # Main Scrollable Content
         main_scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint=(1, 1))
-        col = BoxLayout(orientation="vertical", padding=[dp(20), dp(30), dp(20), dp(40)], spacing=dp(28), size_hint_y=None)
+        col = BoxLayout(orientation="vertical", padding=[dp(20), dp(30), dp(20), dp(110)], spacing=dp(28), size_hint_y=None)
         col.bind(minimum_height=col.setter('height'))
         # Header Section
         header = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(16))
@@ -1380,13 +1821,240 @@ class SaveProApp(App):
         ))
         col.add_widget(footer)
         main_scroll.add_widget(col)
-        root.add_widget(main_scroll)
-        # Global Toast Container
-        self.toast = ToastContainer()
-        root.add_widget(self.toast)
-        self.select_platform("instagram")
         self._refresh_history()
-        return root
+        return main_scroll
+
+    # -- Downloads screen (search + filters + full list) --
+    def _build_downloads_screen(self):
+        wrap = BoxLayout(orientation="vertical", size_hint=(1, 1),
+                          padding=[dp(20), dp(24), dp(20), dp(100)], spacing=dp(14))
+        title = Label(text=ar("كل التنزيلات"), font_size="24sp", bold=True, color=TEXT_MAIN,
+                      size_hint_y=None, height=dp(34), halign="left",
+                      text_size=(Window.width - dp(40), dp(34)))
+        wrap.add_widget(title)
+
+        rows = get_history_full(500)
+
+        def _matches_tab(idx, filename):
+            if idx == 0:
+                return True
+            ext = os.path.splitext(filename or "")[1].lower()
+            if idx == 1:
+                return ext in (".mp4", ".mov", ".mkv", ".webm")
+            return ext in (".mp3", ".m4a", ".aac", ".wav")
+
+        list_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
+        list_box.bind(minimum_height=list_box.setter("height"))
+        list_scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint=(1, 1))
+        list_scroll.add_widget(list_box)
+
+        state = {"tab": 0, "query": "", "platform": "All"}
+
+        def refresh_list(*a):
+            list_box.clear_widgets()
+            filtered = [
+                r for r in rows
+                if _matches_tab(state["tab"], r[3])
+                and (state["query"].lower() in os.path.basename(r[3] or "").lower())
+                and (state["platform"] == "All" or r[1] == state["platform"])
+            ]
+            if not filtered:
+                empty = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(120), spacing=dp(8))
+                empty.add_widget(Label(text="📭", font_size="30sp", size_hint_y=None, height=dp(38)))
+                empty.add_widget(Label(text=ar("لا توجد تنزيلات مطابقة"), font_size="13sp",
+                                        color=TEXT_FAINT, size_hint_y=None, height=dp(26)))
+                list_box.add_widget(empty)
+                return
+            for entry_id, platform_id, url, filename, ts in filtered:
+                card = DownloadItemCard(
+                    entry_id, platform_id, filename, ts,
+                    on_more=lambda eid=entry_id, pid=platform_id, fn=filename: self._open_action_sheet(eid, pid, fn),
+                    on_play=lambda fn=filename: self._play_local_file(fn),
+                )
+                list_box.add_widget(card)
+
+        seg = GlassSegmentedControl(
+            [ar("الكل"), ar("فيديو"), ar("صوت")],
+            on_select=lambda idx: (state.update(tab=idx), refresh_list())
+        )
+        wrap.add_widget(seg)
+
+        search = PremiumInput(hint_text=ar("بحث عن تنزيل..."), height=dp(46))
+        search.bind(text=lambda inst, val: (state.update(query=val), refresh_list()))
+        wrap.add_widget(search)
+
+        chip_scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint_y=None, height=dp(40), do_scroll_y=False)
+        chip_row = BoxLayout(size_hint_x=None, spacing=dp(8), padding=[0, 0, dp(20), 0])
+        chip_row.bind(minimum_width=chip_row.setter("width"))
+        chips = {}
+        platform_opts = ["All"] + [p["id"] for p in PLATFORMS]
+        for opt in platform_opts:
+            label = ar("الكل") if opt == "All" else PLATFORM_BY_ID[opt]["label"]
+
+            def _select(o=opt):
+                state.update(platform=o)
+                for k, c in chips.items():
+                    c.set_selected(k == o)
+                refresh_list()
+
+            chip = FilterChip(label, on_select=lambda _l, o=opt: _select(o))
+            chips[opt] = chip
+            chip_row.add_widget(chip)
+        chips["All"].set_selected(True)
+        chip_scroll.add_widget(chip_row)
+        wrap.add_widget(chip_scroll)
+
+        wrap.add_widget(list_scroll)
+        refresh_list()
+        return wrap
+
+    # -- History screen (grouped by Today / Yesterday / This week) --
+    def _build_history_screen(self):
+        wrap = BoxLayout(orientation="vertical", size_hint=(1, 1),
+                          padding=[dp(20), dp(24), dp(20), dp(100)], spacing=dp(12))
+        title = Label(text=ar("السجل"), font_size="24sp", bold=True, color=TEXT_MAIN,
+                      size_hint_y=None, height=dp(34), halign="left",
+                      text_size=(Window.width - dp(40), dp(34)))
+        wrap.add_widget(title)
+
+        rows = get_history_full(500)
+        scroll = ScrollView(effect_cls=DampedScrollEffect, size_hint=(1, 1))
+        col = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
+        col.bind(minimum_height=col.setter("height"))
+
+        if not rows:
+            empty = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(140), spacing=dp(8))
+            empty.add_widget(Label(text="👻", font_size="32sp", size_hint_y=None, height=dp(40)))
+            empty.add_widget(Label(text=ar("لا توجد تنزيلات بعد"), font_size="14sp",
+                                    color=TEXT_FAINT, size_hint_y=None, height=dp(30)))
+            col.add_widget(empty)
+        else:
+            now = time.time()
+            groups = [(ar("اليوم"), []), (ar("أمس"), []), (ar("هذا الأسبوع"), [])]
+            for entry in rows:
+                ts = entry[4] or 0
+                diff = now - ts
+                if diff < 86400:
+                    groups[0][1].append(entry)
+                elif diff < 2 * 86400:
+                    groups[1][1].append(entry)
+                else:
+                    groups[2][1].append(entry)
+            for label, items in groups:
+                if not items:
+                    continue
+                col.add_widget(Label(text=label, font_size="14sp", bold=True, color=NEON_BLUE,
+                                      size_hint_y=None, height=dp(22), halign="left",
+                                      text_size=(Window.width - dp(40), dp(22))))
+                for entry_id, platform_id, url, filename, ts in items:
+                    card = HistoryItemCard(
+                        entry_id, platform_id, filename, ts,
+                        on_play=lambda fn=filename: self._play_local_file(fn),
+                        on_share=lambda fn=filename: self._share_file(fn),
+                        on_delete=lambda eid=entry_id: self._confirm_delete(eid),
+                    )
+                    col.add_widget(card)
+        scroll.add_widget(col)
+        wrap.add_widget(scroll)
+        return wrap
+
+    # -- Settings screen --
+    def _build_settings_screen(self):
+        wrap = BoxLayout(orientation="vertical", size_hint=(1, 1),
+                          padding=[dp(20), dp(24), dp(20), dp(100)], spacing=dp(14))
+        title = Label(text=ar("الإعدادات"), font_size="24sp", bold=True, color=TEXT_MAIN,
+                      size_hint_y=None, height=dp(34), halign="left",
+                      text_size=(Window.width - dp(40), dp(34)))
+        wrap.add_widget(title)
+
+        def _setting_row(label, value):
+            row = GlassCard(radius=dp(16), size_hint_y=None, height=dp(58),
+                             padding=[dp(16), dp(8), dp(16), dp(8)], spacing=dp(4))
+            row.orientation = "vertical"
+            row.add_widget(Label(text=ar(label), font_size="14sp", bold=True, color=TEXT_MAIN,
+                                  halign="left", text_size=(Window.width - dp(72), dp(20)),
+                                  size_hint_y=None, height=dp(20)))
+            row.add_widget(Label(text=ar(value), font_size="12sp", color=TEXT_MUTED,
+                                  halign="left", text_size=(Window.width - dp(72), dp(18)),
+                                  size_hint_y=None, height=dp(18)))
+            return row
+
+        wrap.add_widget(_setting_row("اللغة", "العربية"))
+        wrap.add_widget(_setting_row("المظهر", "داكن دائمًا"))
+        wrap.add_widget(_setting_row("مسح الحافظة تلقائيًا", "مفعّل"))
+
+        clear_btn = PremiumButton(text=ar("مسح كل السجل"), bg_color=(*NEON_RED[:3], 0.2), text_color=NEON_RED)
+        clear_btn.bind(on_release=lambda *a: self._confirm_clear_all())
+        wrap.add_widget(clear_btn)
+
+        wrap.add_widget(Widget())
+        about = GlassCard(radius=dp(16), orientation="vertical", size_hint_y=None, height=dp(70),
+                           padding=[dp(16), dp(10), dp(16), dp(10)], spacing=dp(4))
+        about.add_widget(Label(text="Save Pro v2.0", font_size="14sp", bold=True, color=TEXT_MAIN,
+                                halign="left", text_size=(Window.width - dp(72), dp(20)),
+                                size_hint_y=None, height=dp(20)))
+        about.add_widget(Label(text="© 2026 Youssef Mansouri", font_size="11sp", color=TEXT_FAINT,
+                                halign="left", text_size=(Window.width - dp(72), dp(18)),
+                                size_hint_y=None, height=dp(18)))
+        wrap.add_widget(about)
+        return wrap
+
+    # -- Downloads / History interactions --
+    def _open_action_sheet(self, entry_id, platform_id, filename):
+        sheet = VideoActionSheet(
+            platform_id, filename,
+            on_play=lambda: self._play_local_file(filename),
+            on_share=lambda: self._share_file(filename),
+            on_delete=lambda: self._confirm_delete(entry_id),
+        )
+        sheet.open()
+
+    def _play_local_file(self, filename):
+        if filename and os.path.exists(filename):
+            LocalVideoPlayerPopup(filename).open()
+        else:
+            self.toast.show_toast(ar("الملف غير موجود"), is_error=True)
+
+    def _share_file(self, filename):
+        if not filename or not os.path.exists(filename):
+            self.toast.show_toast(ar("الملف غير موجود"), is_error=True)
+            return
+        try:
+            from android.storage import primary_external_storage_path  # noqa: F401
+            from jnius import autoclass, cast
+            Intent = autoclass('android.content.Intent')
+            File = autoclass('java.io.File')
+            FileProvider = autoclass('androidx.core.content.FileProvider')
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            activity = PythonActivity.mActivity
+            f = File(filename)
+            uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", f)
+            intent = Intent(Intent.ACTION_SEND)
+            intent.setType("video/*")
+            intent.putExtra(Intent.EXTRA_STREAM, uri)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            activity.startActivity(Intent.createChooser(intent, "Share"))
+        except Exception:
+            try:
+                Clipboard.copy(filename)
+                self.toast.show_toast(ar("تم نسخ مسار الملف"))
+            except Exception:
+                self.toast.show_toast(ar("تعذّرت المشاركة"), is_error=True)
+
+    def _confirm_delete(self, entry_id):
+        def _do_delete():
+            delete_history_entry(entry_id)
+            self.toast.show_toast(ar("تم الحذف"))
+            self.show_screen(self.current_tab, silent=True)
+        DeleteConfirmPopup(on_confirm=_do_delete).open()
+
+    def _confirm_clear_all(self):
+        def _do_clear():
+            for entry_id, *_r in get_history_full(2000):
+                delete_history_entry(entry_id)
+            self.toast.show_toast(ar("تم مسح السجل"))
+            self.show_screen(self.current_tab, silent=True)
+        DeleteConfirmPopup(on_confirm=_do_clear).open()
 
     # -- Background Animation --
     def _upd_bg(self, inst, val):
